@@ -1,13 +1,18 @@
 import {
-  ALL_DEFS, CHARACTERS, ITEMS, SKILLS, charById, skillById, unlockText, type AnyDef,
+  ALL_DEFS, CHARACTERS, ITEMS, SKILLS, charById, itemById, skillById, unlockText, type AnyDef,
 } from './content';
 import { isUnlocked, progressOf, type RunResult, type Save } from './meta';
 import type { Card } from './game';
 import { paintGenIcons } from './icons';
 import { iconHtml, type IconRef } from './sprites';
+import { PAIRS, SETS, SET_NEED, SYN_NAME, TAG_INFO, type SetBonus, type Tag } from './synergy';
 import { ARMORS, RARITY, SLOT_LABEL, WEAPONS, WKIND_LABEL, gearLines, gearTitle, weaponById, type Gear, type Slot } from './gear';
 
 const icon = (key: IconRef, px = 32) => `<span class="icon">${iconHtml(key, px)}</span>`;
+
+const tagChips = (tags: Tag[] | undefined) => (tags && tags.length
+  ? `<div class="tags">${tags.map((t) => `<span class="tag-chip" style="color:${TAG_INFO[t].color};border-color:${TAG_INFO[t].color}">${TAG_INFO[t].name}</span>`).join('')}</div>`
+  : '');
 
 const KIND_LABEL = { char: '캐릭터', item: '아이템', skill: '스킬', gear: '장비' } as const;
 
@@ -43,7 +48,8 @@ export class UI {
     if (!open) {
       return `<div class="card locked"><div class="name">??? <span class="sub">${KIND_LABEL[d.kind]}</span></div>${this.lockInfo(save, d)}</div>`;
     }
-    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${icon(d.sprite)}${d.name}</div><div>${d.desc}</div></div>`;
+    const tags = d.kind === 'item' ? tagChips(d.tags) : '';
+    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${icon(d.sprite)}${d.name}</div>${tags}<div>${d.desc}</div></div>`;
   }
 
   showMenu(save: Save, h: MenuHandlers, tab: 'play' | 'codex' = 'play', picked?: string) {
@@ -128,27 +134,50 @@ export class UI {
     return `<section class="codex">
       <div class="top"><h1>해금 도감</h1><button data-tab="play">닫기</button></div>
       <p class="sub">죽음과 기록이 쌓일수록 새 캐릭터, 스킬, 아이템, 장비가 던전에 등장합니다.</p>
-      ${sec('캐릭터', CHARACTERS) + sec('스킬', SKILLS) + sec('아이템', ITEMS) + sec('장비: 무기', WEAPONS) + sec('장비: 방어구와 장신구', ARMORS)}
+      ${sec('캐릭터', CHARACTERS) + sec('스킬', SKILLS) + sec('아이템', ITEMS)}
+      ${this.synergySection(save)}
+      ${sec('장비: 무기', WEAPONS) + sec('장비: 방어구와 장신구', ARMORS)}
     </section>`;
+  }
+
+  private synergySection(save: Save): string {
+    const setCard = (st: SetBonus) => `<div class="card"><div class="name" style="color:${TAG_INFO[st.tag].color}">${st.name}</div>
+      <div class="sub">${TAG_INFO[st.tag].name} 태그 아이템 ${SET_NEED}종</div><div>${st.desc}</div></div>`;
+    const found = PAIRS.filter((p) => save.discovered.includes(p.id)).length;
+    const pairCard = PAIRS.map((p) => save.discovered.includes(p.id)
+      ? `<div class="card sel"><div class="name">${p.name}</div><div class="sub">${p.items.map((id) => itemById(id).name).join(' + ')}</div><div>${p.desc}</div></div>`
+      : `<div class="card locked"><div class="name">???</div><div class="sub">아이템 2개를 함께 가지면 발견됩니다</div></div>`).join('');
+    return `<h2>세트 효과 <span class="sub">같은 태그 아이템을 서로 다른 종류로 ${SET_NEED}개</span></h2>
+      <div class="grid">${SETS.map(setCard).join('')}</div>
+      <h2>조합 시너지 <span class="sub">발견 ${found}/${PAIRS.length}</span></h2><div class="grid">${pairCard}</div>`;
   }
 
   showReward(cards: Card[], room: number, onPick: (c: Card) => void) {
     const el = this.mount(
       `<h1>ROOM ${room} 클리어</h1><div class="sub">보상을 하나 선택하세요</div>
        <div class="rewards">${cards.map((c, i) =>
-         `<div class="card" data-i="${i}"><div class="name">${icon(c.sprite, 48)}${c.name}</div><div>${c.desc}</div></div>`).join('')}</div>`,
+         `<div class="card ${c.hint ? 'combo' : ''}" data-i="${i}">${c.hint ? `<div class="combo-badge">발동: ${c.hint}</div>` : ''}
+          <div class="name">${icon(c.sprite, 48)}${c.name}</div>${tagChips(c.tags)}<div>${c.desc}</div></div>`).join('')}</div>`,
       'screen dim');
     el.querySelectorAll<HTMLElement>('[data-i]').forEach((b) =>
       b.addEventListener('click', () => onPick(cards[Number(b.dataset.i)])));
   }
 
-  showPause(gear: { slot: Slot; gear: Gear | null }[], onResume: () => void, onQuit: () => void) {
+  showPause(
+    gear: { slot: Slot; gear: Gear | null }[],
+    syn: { active: string[]; sets: (SetBonus & { count: number })[] },
+    onResume: () => void, onQuit: () => void,
+  ) {
     const cards = gear.map(({ slot, gear: g }) => g
       ? `<div class="card" style="border-color:${RARITY[g.rarity].color}"><div class="name">${icon(g.base.sprite)}<span style="color:${RARITY[g.rarity].color}">${gearTitle(g)}</span></div>
          <div class="sub">${gearLines(g).join('<br>')}</div></div>`
       : `<div class="card locked"><div class="name">${SLOT_LABEL[slot]}</div><div class="sub">비어 있음</div></div>`).join('');
     const el = this.mount(
       `<h1>일시정지</h1><h2>장착 장비</h2><div class="grid gear">${cards}</div>
+       <h2>시너지</h2>
+       <div class="sets">${syn.sets.map((st) => `<span class="set-chip ${st.count >= SET_NEED ? 'on' : ''}" style="--c:${TAG_INFO[st.tag].color}">
+         ${TAG_INFO[st.tag].name} ${Math.min(st.count, SET_NEED)}/${SET_NEED} · ${st.name}</span>`).join('')}</div>
+       <div class="sub">${syn.active.filter((id) => !id.startsWith('set:')).map((id) => SYN_NAME.get(id)).join(', ') || '발동 중인 조합 시너지가 없습니다.'}</div>
        <div class="row"><button id="resume" class="primary">계속하기</button><button id="quit" class="danger">런 포기</button></div>`,
       'screen');
     el.querySelector('#resume')!.addEventListener('click', onResume);

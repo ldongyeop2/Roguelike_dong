@@ -32,6 +32,31 @@ const SHAPES = {
     '....oddo....', '...oaooao...', '..oao..oao..', '..oa....ao..',
     '..oa....ao..', '..oao..oao..', '...oaaaao...', '....oooo....',
   ],
+  feather: [
+    '........oo..', '.......oado.', '......oabdo.', '.....oabado.',
+    '....oabaado.', '...oabaado..', '..oabaado...', '..oaaado....',
+    '.oaado......', '.oco........', 'oco.........', 'oo..........',
+  ],
+  bolt: [
+    '......oooo..', '.....oddo...', '....oddo....', '...oddo.....',
+    '..oddooooo..', '.odddddddo..', '..oooodddo..', '.....oddo...',
+    '....oddo....', '...oddo.....', '..odo.......', '..oo........',
+  ],
+  gem: [
+    '.....oo.....', '....obbo....', '...obaabo...', '..obaaaado..',
+    '.obaaaaaado.', 'obaaaaaaaado', 'oaaaaaaaacco', '.oaaaaaacco.',
+    '..oaaaacco..', '...oaacco...', '....occo....', '.....oo.....',
+  ],
+  orb: [
+    '....oooo....', '..ooaaaaoo..', '.oabbaaaaco.', '.obbaaaaaco.',
+    'oabaaddaaaco', 'oaaadbbdaaco', 'oaaadbbdaaco', 'oaaaaddaaaco',
+    '.oaaaaaaacco', '.oaaaaaacco.', '..oocccoo...', '....oooo....',
+  ],
+  stinger: [
+    '..........oo', '.........odo', '........odo.', '.......odo..',
+    '......odo...', '.....odo....', '..oooddo....', '.oaabdo.....',
+    'oaabaao.....', 'oaaaaco.....', '.oacco......', '..ooo.......',
+  ],
   amulet: [
     '.oo......oo.', '.oao....oao.', '..oao..oao..', '...oaooao...',
     '....oaao....', '....oddo....', '...odbddo...', '..odbddddo..',
@@ -52,6 +77,11 @@ const PAL: Record<string, Palette> = {
   emerald: { o: '#1d1f26', a: '#b8c0cc', b: '#d8ffe0', c: '#7d8696', d: '#3ac46a' },
   goldring: { o: '#3a2408', a: '#d9a53a', b: '#fff6c0', c: '#a0701c', d: '#ffe08a' },
   blood: { o: '#200a10', a: '#7a2a3a', b: '#ff99aa', c: '#4a1520', d: '#ff3355' },
+  feather: { o: '#1d1630', a: '#c8b8f0', b: '#ffffff', c: '#6a5aa0', d: '#8a7ad0' },
+  thunder: { o: '#3a2a00', a: '#ffe14a', b: '#fff6c0', c: '#b08a10', d: '#ffe14a' },
+  frost: { o: '#0d2a3a', a: '#7fd8ff', b: '#e0f8ff', c: '#3a8ab0', d: '#ffffff' },
+  split: { o: '#2a0a1a', a: '#d04a7a', b: '#ffc0d8', c: '#7a1a40', d: '#ffe08a' },
+  venom: { o: '#0d240d', a: '#5ab84a', b: '#c8f0a0', c: '#2a6a20', d: '#9af07a' },
 };
 
 export const GEN = {
@@ -71,6 +101,11 @@ export const GEN = {
   g_ring_gold: ['ring', 'goldring'],
   g_amulet_ruby: ['amulet', 'ruby'],
   g_amulet_blood: ['amulet', 'blood'],
+  g_feather: ['feather', 'feather'],
+  g_bolt: ['bolt', 'thunder'],
+  g_gem_frost: ['gem', 'frost'],
+  g_orb_split: ['orb', 'split'],
+  g_stinger: ['stinger', 'venom'],
 } satisfies Record<string, [keyof typeof SHAPES, keyof typeof PAL]>;
 
 export type GenKey = keyof typeof GEN;

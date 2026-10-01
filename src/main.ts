@@ -2,7 +2,7 @@ import './style.css';
 import { Game, type Card } from './game';
 import { Input } from './input';
 import { MenuScene } from './menuScene';
-import { applyRunResult, loadSave, persist, resetSave, type RunResult } from './meta';
+import { applyRunResult, discover, loadSave, persist, resetSave, type RunResult } from './meta';
 import { UI } from './ui';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -35,6 +35,7 @@ function startRun(charId: string) {
       ui.hide();
       game?.pickReward(c);
     }),
+    onSynergy: (id) => { discover(save, id); },
     onEnd: (r: RunResult) => {
       const newly = applyRunResult(save, r);
       ui.showEnd(r, newly, save, menu);
@@ -44,6 +45,7 @@ function startRun(charId: string) {
       if (!game) return;
       ui.showPause(
         game.equipment(),
+        game.synergyInfo(),
         () => {
           if (game) game.paused = false;
           ui.hide();

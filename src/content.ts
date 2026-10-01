@@ -1,5 +1,6 @@
 import { GEAR_BASES, type GearBase } from './gear';
 import type { IconRef } from './sprites';
+import type { Tag } from './synergy';
 import type { SpriteKey } from './spritesheet';
 
 // 게임 콘텐츠 정의. 해금 조건(unlock)이 없는 항목은 처음부터 사용 가능하다.
@@ -49,6 +50,11 @@ export interface Mods {
   regen: number; // 초당 체력 재생
   skillCd: number; // 스킬 쿨타임 배율
   choices: number; // 보상 선택지 수
+  poison: number; // 독 중첩
+  chain: number; // 연쇄 번개
+  homing: number; // 투사체 유도
+  split: number; // 처치 시 파편
+  frost: number; // 냉기(둔화)
 }
 
 export const baseMods = (): Mods => ({
@@ -68,6 +74,11 @@ export const baseMods = (): Mods => ({
   regen: 0,
   skillCd: 1,
   choices: 3,
+  poison: 0,
+  chain: 0,
+  homing: 0,
+  split: 0,
+  frost: 0,
 });
 
 interface Base {
@@ -91,6 +102,7 @@ export interface CharDef extends Base {
 
 export interface ItemDef extends Base {
   kind: 'item';
+  tags: Tag[];
   apply(m: Mods): void;
 }
 
@@ -159,55 +171,75 @@ export const SKILLS: SkillDef[] = [
 
 export const ITEMS: ItemDef[] = [
   // 시작부터 사용 가능
-  { kind: 'item', id: 'sharp', sprite: 'w_serrated', name: '날카로운 날', desc: '피해 +20%', apply: (m) => { m.dmg *= 1.2; } },
-  { kind: 'item', id: 'boots', sprite: 'potion_blue', name: '신속의 장화', desc: '이동 속도 +15%', apply: (m) => { m.speed *= 1.15; } },
-  { kind: 'item', id: 'heart', sprite: 'heart', name: '강화 심장', desc: '최대 체력 +25 (같은 양 회복)', apply: (m) => { m.maxHp += 25; } },
-  { kind: 'item', id: 'quick', sprite: 'w_katana', name: '빠른 손', desc: '공격 속도 +20%', apply: (m) => { m.rate *= 1.2; } },
-  { kind: 'item', id: 'pierce', sprite: 'w_arrow', name: '철갑탄', desc: '관통 +1 (근접은 범위 증가)', apply: (m) => { m.pierce += 1; m.extra += 0.5; } },
-  { kind: 'item', id: 'double', sprite: 'w_dagger', name: '쌍발', desc: '투사체 +1 (근접은 범위 증가)', apply: (m) => { m.extra += 1; } },
+  { kind: 'item', id: 'sharp', tags: ['blade'], sprite: 'w_serrated', name: '날카로운 날', desc: '피해 +20%', apply: (m) => { m.dmg *= 1.2; } },
+  { kind: 'item', id: 'boots', tags: ['swift'], sprite: 'potion_blue', name: '신속의 장화', desc: '이동 속도 +15%', apply: (m) => { m.speed *= 1.15; } },
+  { kind: 'item', id: 'heart', tags: ['guard'], sprite: 'heart', name: '강화 심장', desc: '최대 체력 +25 (같은 양 회복)', apply: (m) => { m.maxHp += 25; } },
+  { kind: 'item', id: 'quick', tags: ['swift'], sprite: 'w_katana', name: '빠른 손', desc: '공격 속도 +20%', apply: (m) => { m.rate *= 1.2; } },
+  { kind: 'item', id: 'pierce', tags: ['shot', 'blade'], sprite: 'w_arrow', name: '철갑탄', desc: '관통 +1 (근접은 범위 증가)', apply: (m) => { m.pierce += 1; m.extra += 0.5; } },
+  { kind: 'item', id: 'double', tags: ['shot'], sprite: 'w_dagger', name: '쌍발', desc: '투사체 +1 (근접은 범위 증가)', apply: (m) => { m.extra += 1; } },
+  {
+    kind: 'item', id: 'poison', tags: ['element', 'blood'], sprite: 'g_stinger', name: '독침',
+    desc: '공격이 독을 겁니다(최대 5중첩, 3초)', apply: (m) => { m.poison += 1; },
+  },
+  {
+    kind: 'item', id: 'homing', tags: ['shot'], sprite: 'g_feather', name: '유도 깃털',
+    desc: '투사체가 가까운 적을 향해 휘어집니다 (근접은 범위 증가)', apply: (m) => { m.homing += 1; m.extra += 0.5; },
+  },
   // 해금 필요
   {
-    kind: 'item', id: 'vampire', sprite: 'potion_red', name: '흡혈 송곳니', desc: '가한 피해의 4%를 체력으로 회복',
+    kind: 'item', id: 'frost', tags: ['element'], sprite: 'g_gem_frost', name: '서리 결정',
+    desc: '공격이 적을 얼려 1.5초간 40% 느리게 합니다', apply: (m) => { m.frost += 1; }, unlock: { stat: 'deaths', target: 2 },
+  },
+  {
+    kind: 'item', id: 'chain', tags: ['element'], sprite: 'g_bolt', name: '번개 병',
+    desc: '공격 시 15% 확률로 번개가 주변 적 2명에게 튑니다', apply: (m) => { m.chain += 1; }, unlock: { stat: 'totalKills', target: 100 },
+  },
+  {
+    kind: 'item', id: 'split', tags: ['blade'], sprite: 'g_orb_split', name: '분열 구슬',
+    desc: '적을 처치하면 파편 3개가 사방으로 튑니다', apply: (m) => { m.split += 1; }, unlock: { stat: 'bestRoom', target: 4 },
+  },
+  {
+    kind: 'item', id: 'vampire', tags: ['blood'], sprite: 'potion_red', name: '흡혈 송곳니', desc: '가한 피해의 4%를 체력으로 회복',
     apply: (m) => { m.lifesteal += 0.04; }, unlock: { stat: 'totalKills', target: 80 },
   },
   {
-    kind: 'item', id: 'ember', sprite: 'w_golden', name: '화염 부적', desc: '공격 시 적에게 화상(3초)',
+    kind: 'item', id: 'ember', tags: ['element'], sprite: 'w_golden', name: '화염 부적', desc: '공격 시 적에게 화상(3초)',
     apply: (m) => { m.burn += 1; }, unlock: { stat: 'bestRoom', target: 5 },
   },
   {
-    kind: 'item', id: 'bounce', sprite: 'w_cleaver', name: '도탄', desc: '투사체가 벽에서 1회 튕김',
+    kind: 'item', id: 'bounce', tags: ['shot'], sprite: 'w_cleaver', name: '도탄', desc: '투사체가 벽에서 1회 튕김',
     apply: (m) => { m.bounce += 1; }, unlock: { stat: 'totalKills', target: 300 },
   },
   {
-    kind: 'item', id: 'blades', sprite: 'w_hatchet', name: '회전 칼날', desc: '몸 주위를 도는 칼날 +1',
+    kind: 'item', id: 'blades', tags: ['blade'], sprite: 'w_hatchet', name: '회전 칼날', desc: '몸 주위를 도는 칼날 +1',
     apply: (m) => { m.orbit += 1; }, unlock: { stat: 'bossKills', target: 1 },
   },
   {
-    kind: 'item', id: 'thorns', sprite: 'w_mace', name: '가시 갑옷', desc: '피격 시 주변 적에게 반격 피해',
+    kind: 'item', id: 'thorns', tags: ['guard', 'blood'], sprite: 'w_mace', name: '가시 갑옷', desc: '피격 시 주변 적에게 반격 피해',
     apply: (m) => { m.thorns += 1; }, unlock: { stat: 'deaths', target: 3 },
   },
   {
-    kind: 'item', id: 'bomb', sprite: 'bomb', name: '폭발 구슬', desc: '적 처치 시 작은 폭발',
+    kind: 'item', id: 'bomb', tags: ['element'], sprite: 'bomb', name: '폭발 구슬', desc: '적 처치 시 작은 폭발',
     apply: (m) => { m.explode += 1; }, unlock: { stat: 'bossKills', target: 2 },
   },
   {
-    kind: 'item', id: 'lens', sprite: 'flask_yellow', name: '치명 렌즈', desc: '치명타 확률 +12% (피해 2배)',
+    kind: 'item', id: 'lens', tags: ['shot'], sprite: 'flask_yellow', name: '치명 렌즈', desc: '치명타 확률 +12% (피해 2배)',
     apply: (m) => { m.crit += 0.12; }, unlock: { stat: 'itemsCollected', target: 25 },
   },
   {
-    kind: 'item', id: 'moss', sprite: 'potion_green', name: '재생의 이끼', desc: '초당 체력 0.6 회복',
+    kind: 'item', id: 'moss', tags: ['guard'], sprite: 'potion_green', name: '재생의 이끼', desc: '초당 체력 0.6 회복',
     apply: (m) => { m.regen += 0.6; }, unlock: { stat: 'deaths', target: 6 },
   },
   {
-    kind: 'item', id: 'glass', sprite: 'heart_half', name: '유리 대포', desc: '피해 +60%, 최대 체력 -30',
+    kind: 'item', id: 'glass', tags: ['blood'], sprite: 'heart_half', name: '유리 대포', desc: '피해 +60%, 최대 체력 -30',
     apply: (m) => { m.dmg *= 1.6; m.maxHp -= 30; }, unlock: { stat: 'bestRoom', target: 8 },
   },
   {
-    kind: 'item', id: 'hourglass', sprite: 'flask_green', name: '모래시계', desc: '스킬 쿨타임 -25%',
+    kind: 'item', id: 'hourglass', tags: ['swift'], sprite: 'coin', name: '모래시계', desc: '스킬 쿨타임 -25%',
     apply: (m) => { m.skillCd *= 0.75; }, unlock: { stat: 'totalKills', target: 600 },
   },
   {
-    kind: 'item', id: 'coin', sprite: 'chest', name: '행운의 동전', desc: '보상 선택지 +1 (최대 5)',
+    kind: 'item', id: 'coin', tags: [], sprite: 'chest', name: '행운의 동전', desc: '보상 선택지 +1 (최대 5)',
     apply: (m) => { m.choices += 1; }, unlock: { stat: 'totalRooms', target: 30 },
   },
 ];

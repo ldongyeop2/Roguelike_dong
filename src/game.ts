@@ -7,6 +7,7 @@ import {
   type Gear, type GearStats, type Slot, type StatKey, type WeaponBase, type WeaponKind,
 } from './gear';
 import type { Input } from './input';
+import { SETS, SYN_NAME, TAG_INFO, activeSynergies, tagCounts, type Tag } from './synergy';
 import type { RunResult } from './meta';
 import { FOUNTAIN_X, buildRoom, drawLighting, drawWallAnim, themeForRoom, type Light } from './room';
 import { animFrame, drawIcon, drawSprite, type IconRef } from './sprites';
@@ -78,6 +79,8 @@ interface Enemy {
   st: number; // 상태 타이머
   dx: number; dy: number; // 돌진 방향
   burnT: number; burnDps: number;
+  poisonT: number; poisonStacks: number;
+  frostT: number;
   orbitCd: number;
   flash: number;
   tier: number; // 보스 단계
@@ -94,6 +97,9 @@ interface Proj {
   hit: Set<number>;
   color: string;
   sprite?: SpriteKey;
+  proc?: boolean; // 다른 효과로 생긴 투사체(연쇄 발동 방지)
+  boom?: boolean; // 맞으면 작게 폭발
+  glow?: string; // 원소 색 빛
 }
 
 interface Turret { x: number; y: number; t: number; cd: number }
@@ -107,6 +113,8 @@ interface Fx {
 
 export interface Card {
   kind: 'item' | 'skill' | 'heal';
+  tags?: Tag[];
+  hint?: string; // 이 카드를 고르면 발동하는 시너지
   id: string;
   name: string;
   desc: string;
@@ -117,6 +125,7 @@ export interface GameEvents {
   onReward(cards: Card[], room: number): void;
   onEnd(result: RunResult): void;
   onPause(paused: boolean): void;
+  onSynergy(id: string): void;
 }
 
 type Phase = 'playing' | 'cleared' | 'exiting' | 'reward' | 'ended';
@@ -155,6 +164,11 @@ export class Game {
   private sink = 0; // 구멍으로 내려간 깊이(px)
   private fade = 0; // 화면 암전(0~1)
   private enterT = 0; // 새 방 입장 낙하 남은 시간
+  private syn = new Set<string>(); // 발동 중인 시너지
+  private attackCount = 0;
+  private guardT = 10; // 철벽 세트 보호막 주기
+  private accelT = 0; // 가속 회로 지속 시간
+  private bolts: { pts: { x: number; y: number }[]; t: number; life: number }[] = [];
 
   private enemies: Enemy[] = [];
   private projs: Proj[] = [];
@@ -254,7 +268,7 @@ export class Game {
   private makeEnemy(kind: EnemyKind, x: number, y: number, hpMul: number): Enemy {
     const base = {
       id: this.nextId++, x, y, kx: 0, ky: 0, spawnT: 0.9, cd: rand(0.6, 1.6), state: 0, st: 0,
-      dx: 0, dy: 0, burnT: 0, burnDps: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, dead: false,
+      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, dead: false,
     };
     if (kind === 'boss') {
       const tier = Math.floor(this.room / BOSS_EVERY);
@@ -314,7 +328,12 @@ export class Game {
         cards.push({ kind: 'skill', id: s.id, sprite: s.sprite, name: `[스킬] ${s.name}`, desc: `${s.desc} (쿨타임 ${s.cd}초, 현재 스킬 교체)` });
       } else {
         const i = items.pop()!;
-        cards.push({ kind: 'item', id: i.id, sprite: i.sprite, name: i.name, desc: i.desc });
+        const next = activeSynergies([...this.itemCounts.keys(), i.id], (id) => itemById(id).tags);
+        const gained = [...next].filter((x) => !this.syn.has(x)).map((x) => SYN_NAME.get(x));
+        cards.push({
+          kind: 'item', id: i.id, sprite: i.sprite, name: i.name, desc: i.desc, tags: i.tags,
+          hint: gained.length ? gained.join(', ') : undefined,
+        });
       }
     }
     return cards;
@@ -332,6 +351,7 @@ export class Game {
       itemById(card.id).apply(this.m);
       this.recalc();
       this.itemCounts.set(card.id, (this.itemCounts.get(card.id) ?? 0) + 1);
+      this.refreshSynergies();
       this.itemsCollected++;
     }
     this.startRoom(this.room + 1);
@@ -441,6 +461,77 @@ export class Game {
   }
 
   /** 장비 능력치 합계를 다시 계산하고 최대 체력을 반영한다. 최대 체력이 늘면 그만큼 회복. */
+  private has(id: string) {
+    return this.syn.has(id);
+  }
+
+  /** 보유 아이템으로 시너지를 다시 계산하고, 새로 발동한 것을 알린다. */
+  private refreshSynergies() {
+    const next = activeSynergies(this.itemCounts.keys(), (id) => itemById(id).tags);
+    for (const id of next) {
+      if (this.syn.has(id)) continue;
+      const isSet = id.startsWith('set:');
+      this.fx.push({
+        kind: 'text', x: W / 2, y: H / 2 + 10, t: 0, life: 2.4, big: true,
+        text: `${isSet ? '세트' : '시너지'}: ${SYN_NAME.get(id)}`, color: isSet ? '#8fd0ff' : '#ffb35c',
+      });
+      this.ev.onSynergy(id);
+    }
+    this.syn = next;
+  }
+
+  /** 일시정지 화면용: 발동 중인 시너지와 태그별 진행도 */
+  synergyInfo() {
+    const counts = tagCounts(this.itemCounts.keys(), (id) => itemById(id).tags);
+    return {
+      active: [...this.syn],
+      sets: SETS.map((st) => ({ ...st, count: counts.get(st.tag) ?? 0 })),
+    };
+  }
+
+  /** 원소 효과 색(투사체/궤적 표시용) */
+  private elementColor(): string | undefined {
+    if (this.m.chain > 0) return '#ffe14a';
+    if (this.m.frost > 0) return '#9fe6ff';
+    if (this.m.poison > 0) return '#8ae06a';
+    if (this.m.burn > 0) return '#ff9a4a';
+    return undefined;
+  }
+
+  /** 주변 적에게 번개가 튄다. */
+  private chainLightning(from: Enemy, dmg: number, jumps: number) {
+    const hit = new Set([from.id]);
+    const pts = [{ x: from.x, y: from.y }];
+    let cur = from;
+    for (let j = 0; j < jumps; j++) {
+      let best: Enemy | null = null;
+      let bd = 170;
+      for (const e of this.enemies) {
+        if (e.dead || e.spawnT > 0 || hit.has(e.id)) continue;
+        const d = dist(e.x, e.y, cur.x, cur.y);
+        if (d < bd) { bd = d; best = e; }
+      }
+      if (!best) break;
+      hit.add(best.id);
+      pts.push({ x: best.x, y: best.y });
+      this.hurtEnemy(best, dmg, true, true);
+      cur = best;
+    }
+    if (pts.length > 1) this.bolts.push({ pts, t: 0, life: 0.2 });
+  }
+
+  /** 파편(근접/원거리 공통): 다른 효과를 다시 일으키지 않는 작은 투사체 */
+  private shards(x: number, y: number, n: number, dmg: number, boom: boolean) {
+    const off = rand(0, Math.PI * 2);
+    for (let i = 0; i < n; i++) {
+      const a = off + (i * Math.PI * 2) / n;
+      this.projs.push({
+        x, y, vx: Math.cos(a) * 420, vy: Math.sin(a) * 420, r: 4, dmg, life: 0.55, friendly: true,
+        pierce: 0, bounce: 0, hit: new Set(), color: '#e8d8ff', sprite: 'w_dagger', proc: true, boom,
+      });
+    }
+  }
+
   private recalc() {
     const z = ZERO_STATS();
     for (const slot of SLOTS) {
@@ -522,6 +613,7 @@ export class Game {
 
   private dmgMul(): number {
     let v = this.m.dmg * (1 + this.gs.dmgPct);
+    if (this.has('set:blood') && this.p.hp / this.p.maxHp < 0.4) v *= 1.3;
     if (this.p.rageT > 0) v *= 1.5;
     if (this.char.id === 'berserker') v *= 1 + (1 - this.p.hp / this.p.maxHp);
     return v;
@@ -550,7 +642,7 @@ export class Game {
     } else {
       const a = this.input.axis();
       p.moving = a.x !== 0 || a.y !== 0;
-      const sp = this.char.speed * this.m.speed * Math.max(0.5, 1 + this.gs.speed);
+      const sp = this.char.speed * this.m.speed * Math.max(0.5, 1 + this.gs.speed) * (this.has('set:swift') ? 1.15 : 1);
       p.x += a.x * sp * dt;
       p.y += a.y * sp * dt;
     }
@@ -559,7 +651,18 @@ export class Game {
 
     if (this.input.takeSkill() && p.skillCd <= 0) this.useSkill();
 
-    const rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1);
+    let rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1);
+    if (this.has('set:swift') && p.moving) rate *= 1.2;
+    if (this.accelT > 0) rate *= 1.5;
+    this.accelT = Math.max(0, this.accelT - dt);
+    // 철벽 세트: 10초마다 보호막
+    if (this.has('set:guard') && this.phase === 'playing') {
+      this.guardT -= dt;
+      if (this.guardT <= 0) {
+        this.guardT = 10;
+        if (p.shieldT <= 0) p.shieldT = 9999;
+      }
+    }
     if (this.input.down && p.atkCd <= 0 && this.enterT <= 0) {
       p.atkCd = this.weapon.base.cd / rate;
       this.attack(p.atkCd);
@@ -570,6 +673,7 @@ export class Game {
     const p = this.p;
     const def = skillById(p.skillId);
     p.skillCd = def.cd * this.skillCdMul();
+    if (this.has('overclock')) this.accelT = 2.5;
     switch (def.id) {
       case 'dash': {
         const a = this.input.axis();
@@ -622,27 +726,31 @@ export class Game {
     p.swingT = p.swingDur;
     p.swingAim = p.aim;
     p.swingDir = -p.swingDir; // 베기는 좌우를 번갈아 휘두른다
+    this.attackCount++;
+    if (this.has('set:blade') && this.attackCount % 4 === 0) this.shards(p.x, p.y, 8, w.dmg * 0.5 * this.dmgMul(), this.has('chain_blast'));
 
     if (b.wkind === 'bow' || b.wkind === 'staff') {
       const bow = b.wkind === 'bow';
-      const count = 1 + Math.floor(m.extra);
+      const count = 1 + Math.floor(m.extra) + (this.has('tracking') ? 1 : 0);
+      const sharp = this.has('set:shot');
+      const elem = this.elementColor();
       const step = bow ? 0.12 : 0.18;
-      const speed = bow ? 560 : 380;
+      const speed = (bow ? 560 : 380) * (sharp ? 1.3 : 1);
       for (let i = 0; i < count; i++) {
         const a = p.aim + (i - (count - 1) / 2) * step;
         this.projs.push({
           x: p.x + Math.cos(a) * 18, y: p.y - 6 + Math.sin(a) * 18,
           vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
           r: bow ? 4 : 9, dmg, life: bow ? 1.2 : 1.6, friendly: true,
-          pierce: m.pierce + (bow ? 0 : 2), bounce: m.bounce, hit: new Set(),
-          color: b.id === 'staff_green' ? '#7ee08a' : '#b49cff',
+          pierce: m.pierce + (bow ? 0 : 2) + (sharp ? 1 : 0), bounce: m.bounce, hit: new Set(),
+          color: elem ?? (b.id === 'staff_green' ? '#7ee08a' : '#b49cff'), glow: elem,
           sprite: bow ? 'w_arrow' : undefined,
         });
       }
       return;
     }
 
-    const range = b.range + m.extra * 16;
+    const range = (b.range + m.extra * 16) * (this.has('set:shot') ? 1.2 : 1);
     const ax = Math.cos(p.aim);
     const ay = Math.sin(p.aim);
     for (const e of this.enemies) {
@@ -694,16 +802,18 @@ export class Game {
   private updateOrbit(dt: number) {
     const n = this.m.orbit;
     if (n <= 0) return;
-    this.p.orbitA += dt * 3.2;
+    const wheel = this.has('fire_wheel');
+    const R = wheel ? 72 : 58;
+    this.p.orbitA += dt * (wheel ? 4.6 : 3.2);
     for (let i = 0; i < n; i++) {
       const a = this.p.orbitA + (i * Math.PI * 2) / n;
-      const bx = this.p.x + Math.cos(a) * 58;
-      const by = this.p.y + Math.sin(a) * 58;
+      const bx = this.p.x + Math.cos(a) * R;
+      const by = this.p.y + Math.sin(a) * R;
       for (const e of this.enemies) {
         if (e.spawnT > 0 || e.dead || e.orbitCd > 0) continue;
         if (dist(bx, by, e.x, e.y) < e.r + 9) {
           e.orbitCd = 0.4;
-          this.hurtEnemy(e, 7 * this.dmgMul(), true);
+          this.hurtEnemy(e, 7 * this.dmgMul() * (wheel ? 1.5 : 1), true);
         }
       }
     }
@@ -711,7 +821,7 @@ export class Game {
 
   // ---------- 적 ----------
 
-  private updateEnemies(dtReal: number, dt: number) {
+  private updateEnemies(dtReal: number, dtE: number) {
     const p = this.p;
     for (const e of this.enemies) {
       if (e.dead) continue;
@@ -719,11 +829,22 @@ export class Game {
       e.orbitCd = Math.max(0, e.orbitCd - dtReal);
       if (e.spawnT > 0) { e.spawnT -= dtReal; continue; }
 
+      // 지속 피해: 독연 시너지면 화상과 독이 함께 걸린 적은 2배
+      const both = this.has('toxic_fire') && e.burnT > 0 && e.poisonT > 0 ? 2 : 1;
       if (e.burnT > 0) {
         e.burnT -= dtReal;
-        e.hp -= e.burnDps * dtReal;
-        if (e.hp <= 0) { this.killEnemy(e); continue; }
+        e.hp -= e.burnDps * both * dtReal;
+        if (Math.random() < dtReal * 8) this.burst(e.x + rand(-e.r, e.r), e.y, 1, '#ff8a3a', 30, { grav: -80, size: 3, life: 0.5 });
       }
+      if (e.poisonT > 0) {
+        e.poisonT -= dtReal;
+        e.hp -= 2 * this.m.poison * e.poisonStacks * both * dtReal;
+        if (e.poisonT <= 0) e.poisonStacks = 0;
+        if (Math.random() < dtReal * 6) this.burst(e.x + rand(-e.r, e.r), e.y, 1, '#8ae06a', 20, { grav: -50, size: 3, life: 0.6, glow: false });
+      }
+      if (e.hp <= 0) { this.killEnemy(e); continue; }
+      e.frostT = Math.max(0, e.frostT - dtReal);
+      const dt = e.frostT > 0 ? dtE * 0.6 : dtE;
       e.x += e.kx * dtReal;
       e.y += e.ky * dtReal;
       const decay = Math.exp(-9 * dtReal);
@@ -852,8 +973,30 @@ export class Game {
 
   private updateProjs(dtReal: number, dtEnemy: number) {
     const p = this.p;
+    const turn = this.m.homing > 0 ? (this.has('tracking') ? 8 : 3) * Math.min(3, this.m.homing) : 0;
     for (const q of this.projs) {
       const dt = q.friendly ? dtReal : dtEnemy;
+      if (q.friendly && turn > 0 && !q.proc) {
+        // 유도: 가까운 적 쪽으로 진행 방향을 조금씩 튼다.
+        let best: Enemy | null = null;
+        let bd = 260;
+        for (const e of this.enemies) {
+          if (e.dead || e.spawnT > 0 || q.hit.has(e.id)) continue;
+          const d = dist(q.x, q.y, e.x, e.y);
+          if (d < bd) { bd = d; best = e; }
+        }
+        if (best) {
+          const sp = Math.hypot(q.vx, q.vy);
+          const cur = Math.atan2(q.vy, q.vx);
+          const want = Math.atan2(best.y - q.y, best.x - q.x);
+          let diff = want - cur;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          const a = cur + clamp(diff, -turn * dt, turn * dt);
+          q.vx = Math.cos(a) * sp;
+          q.vy = Math.sin(a) * sp;
+        }
+      }
       q.x += q.vx * dt;
       q.y += q.vy * dt;
       q.life -= dt;
@@ -864,6 +1007,7 @@ export class Game {
       if (q.x < minX || q.x > maxX || q.y < minY || q.y > maxY) {
         if (q.friendly && q.bounce > 0) {
           q.bounce--;
+          if (this.has('ricochet')) { q.pierce++; q.dmg *= 1.2; }
           if (q.x < minX || q.x > maxX) { q.vx = -q.vx; q.x = clamp(q.x, minX, maxX); }
           if (q.y < minY || q.y > maxY) { q.vy = -q.vy; q.y = clamp(q.y, minY, maxY); }
           q.hit.clear();
@@ -878,7 +1022,8 @@ export class Game {
           if (e.dead || e.spawnT > 0 || q.hit.has(e.id)) continue;
           if (dist(q.x, q.y, e.x, e.y) < q.r + e.r) {
             q.hit.add(e.id);
-            this.hurtEnemy(e, q.dmg, true);
+            this.hurtEnemy(e, q.dmg, true, q.proc);
+            if (q.boom) this.blast(q.x, q.y, 40, 10 * this.m.dmg);
             if (q.pierce <= 0) { q.life = 0; break; }
             q.pierce--;
           }
@@ -893,11 +1038,15 @@ export class Game {
 
   // ---------- 피해 ----------
 
-  private hurtEnemy(e: Enemy, base: number, fromPlayer: boolean) {
+  /**
+   * 적에게 피해를 준다. proc=true는 다른 효과(번개, 폭발, 파편)에서 온 피해로,
+   * 상태이상과 흡혈은 적용되지만 번개처럼 연쇄를 다시 일으키지는 않는다.
+   */
+  private hurtEnemy(e: Enemy, base: number, fromPlayer: boolean, proc = false) {
     if (e.dead) return;
     let d = base;
     let crit = false;
-    if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= 2; crit = true; }
+    if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= this.has('execute') ? 3 : 2; crit = true; }
     e.hp -= d;
     e.flash = 0.1;
     if (fromPlayer) {
@@ -909,14 +1058,31 @@ export class Game {
       text: String(Math.round(d)), color: crit ? '#ffd24a' : '#ffffff',
     });
     if (fromPlayer) {
-      const ls = this.m.lifesteal + this.gs.lifesteal;
+      const ls = this.m.lifesteal + this.gs.lifesteal + (this.has('set:blood') ? 0.05 : 0);
       if (ls > 0) this.heal(d * ls);
       if (this.m.burn > 0) { e.burnT = 3; e.burnDps = 3 * this.m.burn; }
+      if (this.m.poison > 0) { e.poisonStacks = Math.min(5, e.poisonStacks + 1); e.poisonT = 3; }
+      if (this.m.frost > 0) e.frostT = Math.max(e.frostT, 1 + 0.5 * this.m.frost);
+      if (!proc && this.m.chain > 0) {
+        const sc = this.has('superconduct') && e.frostT > 0;
+        const chance = sc ? 1 : Math.min(0.5, 0.15 * this.m.chain);
+        if (Math.random() < chance) this.chainLightning(e, base * 0.6, 2 + (sc ? 1 : 0));
+      }
     }
-    if (e.hp <= 0) this.killEnemy(e);
+    if (e.hp <= 0) this.killEnemy(e, proc);
   }
 
-  private killEnemy(e: Enemy) {
+  /** 범위 폭발(효과 피해) */
+  private blast(x: number, y: number, R: number, dmg: number) {
+    this.fx.push({ kind: 'ring', x, y, t: 0, life: 0.25, r: R, color: '#ffb35c' });
+    this.burst(x, y, 6, '#ffb35c', 140, { size: 3, life: 0.3 });
+    for (const o of this.enemies) {
+      if (o.dead || o.spawnT > 0) continue;
+      if (dist(o.x, o.y, x, y) < R + o.r) this.hurtEnemy(o, dmg, true, true);
+    }
+  }
+
+  private killEnemy(e: Enemy, proc = false) {
     if (e.dead) return;
     e.dead = true;
     this.kills++;
@@ -926,12 +1092,24 @@ export class Game {
     if (e.kind === 'brute') this.shake = Math.max(this.shake, 4);
     if (Math.random() < DROP_CHANCE[e.kind]) this.spawnDrop(e.x, e.y, e.kind === 'boss' ? 2 : 0);
     if (this.m.explode > 0) {
-      const R = 60 + this.m.explode * 10;
-      this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.25, r: R, color: '#ffb35c' });
-      for (const o of this.enemies) {
-        if (o.dead || o.spawnT > 0) continue;
-        if (dist(o.x, o.y, e.x, e.y) < R + o.r) this.hurtEnemy(o, 12 * this.m.explode * this.m.dmg, true);
+      const fb = this.has('fire_blast');
+      this.blast(e.x, e.y, 60 + this.m.explode * 10 + (fb ? 30 : 0), 12 * this.m.explode * this.m.dmg * (fb ? 1.5 : 1));
+      if (fb) {
+        for (const o of this.enemies) {
+          if (!o.dead && dist(o.x, o.y, e.x, e.y) < 100 + o.r) { o.burnT = 3; o.burnDps = Math.max(o.burnDps, 3 * Math.max(1, this.m.burn)); }
+        }
       }
+    }
+    if (!proc && this.m.split > 0) this.shards(e.x, e.y, 3 * this.m.split, this.weapon.dmg * 0.4 * this.dmgMul(), this.has('chain_blast'));
+    if (this.has('set:blood')) this.heal(2);
+    if (this.has('set:element') && (e.burnT > 0 || e.poisonT > 0)) {
+      // 원소술사: 상태이상이 주변으로 옮겨 붙는다.
+      for (const o of this.enemies) {
+        if (o.dead || o === e || dist(o.x, o.y, e.x, e.y) > 110 + o.r) continue;
+        if (e.burnT > 0) { o.burnT = Math.max(o.burnT, 2.5); o.burnDps = Math.max(o.burnDps, e.burnDps); }
+        if (e.poisonT > 0) { o.poisonT = Math.max(o.poisonT, 2.5); o.poisonStacks = Math.max(o.poisonStacks, e.poisonStacks); }
+      }
+      this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.35, r: 110, color: '#9ae07a' });
     }
     if (e.kind === 'boss') {
       this.shake = 14;
@@ -964,7 +1142,11 @@ export class Game {
       const R = 90;
       for (const e of this.enemies) {
         if (e.dead || e.spawnT > 0) continue;
-        if (dist(e.x, e.y, p.x, p.y) < R + e.r) this.hurtEnemy(e, 20 * this.m.thorns * this.m.dmg, true);
+        if (dist(e.x, e.y, p.x, p.y) < R + e.r) {
+          const td = 20 * this.m.thorns * this.m.dmg;
+          this.hurtEnemy(e, td, true, true);
+          if (this.has('blood_thorns')) this.heal(td * 0.5);
+        }
       }
       this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.25, r: R, color: '#e06666' });
     }
@@ -982,6 +1164,8 @@ export class Game {
   private updateFx(dt: number) {
     for (const f of this.fx) f.t += dt;
     this.fx = this.fx.filter((f) => f.t < f.life).slice(-200);
+    for (const b of this.bolts) b.t += dt;
+    this.bolts = this.bolts.filter((b) => b.t < b.life);
     for (const q of this.parts) {
       q.life += dt;
       q.vy += q.grav * dt;
@@ -1093,8 +1277,9 @@ export class Game {
       c.beginPath();
       c.ellipse(e.x, feet, e.r * 0.9, e.r * 0.3, 0, 0, Math.PI * 2);
       c.fill();
-      if (e.burnT > 0) {
-        c.fillStyle = 'rgba(255, 140, 50, 0.35)';
+      const aura = e.frostT > 0 ? 'rgba(140, 210, 255, 0.4)' : e.burnT > 0 ? 'rgba(255, 140, 50, 0.35)' : e.poisonT > 0 ? 'rgba(130, 220, 100, 0.3)' : '';
+      if (aura) {
+        c.fillStyle = aura;
         c.beginPath();
         c.arc(e.x, e.y, e.r + 4, 0, Math.PI * 2);
         c.fill();
@@ -1115,6 +1300,12 @@ export class Game {
     }
 
     for (const q of this.projs) {
+      if (q.glow) {
+        c.fillStyle = q.glow + '55';
+        c.beginPath();
+        c.arc(q.x, q.y, 9, 0, Math.PI * 2);
+        c.fill();
+      }
       if (q.sprite !== undefined) {
         // 무기 스프라이트는 위쪽을 향하므로 진행 방향에 맞춰 90도 보정한다.
         drawSprite(c, q.sprite, q.x, q.y, 1.6, { rot: Math.atan2(q.vy, q.vx) + Math.PI / 2 });
@@ -1135,7 +1326,14 @@ export class Game {
     const p = this.p;
     for (let i = 0; i < this.m.orbit; i++) {
       const a = p.orbitA + (i * Math.PI * 2) / this.m.orbit;
-      drawSprite(c, 'w_knight', p.x + Math.cos(a) * 58, p.y + Math.sin(a) * 58, 1.2, { rot: a + Math.PI });
+      const R = this.has('fire_wheel') ? 72 : 58;
+      if (this.has('fire_wheel')) {
+        c.fillStyle = 'rgba(255, 140, 40, 0.35)';
+        c.beginPath();
+        c.arc(p.x + Math.cos(a) * R, p.y + Math.sin(a) * R, 14, 0, Math.PI * 2);
+        c.fill();
+      }
+      drawSprite(c, 'w_knight', p.x + Math.cos(a) * R, p.y + Math.sin(a) * R, 1.2, { rot: a + Math.PI });
     }
     c.globalAlpha = p.invuln > 0 && Math.floor(p.invuln * 20) % 2 === 0 ? 0.4 : 1;
     const facingLeft = Math.cos(p.aim) < 0;
@@ -1195,6 +1393,32 @@ export class Game {
 
     this.renderLighting(c, theme.dark, theme.glow);
 
+    // 연쇄 번개
+    c.globalCompositeOperation = 'lighter';
+    for (const b of this.bolts) {
+      c.globalAlpha = 1 - b.t / b.life;
+      for (const [w, col] of [[6, 'rgba(255, 220, 80, 0.35)'], [2, '#fff8c0']] as [number, string][]) {
+        c.strokeStyle = col;
+        c.lineWidth = w;
+        c.beginPath();
+        c.moveTo(b.pts[0].x, b.pts[0].y);
+        for (let i = 1; i < b.pts.length; i++) {
+          const a = b.pts[i - 1];
+          const z = b.pts[i];
+          // 꺾인 번개 모양
+          for (let k = 1; k <= 4; k++) {
+            const tt = k / 4;
+            const jx = k < 4 ? rand(-10, 10) : 0;
+            const jy = k < 4 ? rand(-10, 10) : 0;
+            c.lineTo(a.x + (z.x - a.x) * tt + jx, a.y + (z.y - a.y) * tt + jy);
+          }
+        }
+        c.stroke();
+      }
+    }
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'source-over';
+
     // 입자(빛나는 입자는 가산 혼합)
     for (const q of this.parts) {
       const k = q.life / q.max;
@@ -1217,7 +1441,8 @@ export class Game {
       c.globalAlpha = k > 0.7 ? (1 - k) / 0.3 : 1;
       // 숫자는 픽셀 글꼴, 한글 문구는 한글 글꼴
       const numeric = /^[-+\d]+$/.test(f.text ?? '');
-      c.font = f.big ? '30px "Press Start 2P", monospace' : numeric ? '10px "Press Start 2P", monospace' : this.font(17);
+      const latin = /^[A-Z0-9 ]+$/.test(f.text ?? '');
+      c.font = f.big ? (latin ? '30px "Press Start 2P", monospace' : this.font(34)) : numeric ? '10px "Press Start 2P", monospace' : this.font(17);
       c.lineWidth = f.big ? 7 : 3;
       c.strokeText(f.text ?? '', f.x, f.y - lift);
       c.fillStyle = f.color;
@@ -1301,11 +1526,14 @@ export class Game {
         // 휘두른 궤적
         const r = (b.range + this.m.extra * 16) * 0.8;
         const a0 = p.swingAim - p.swingDir * arc / 2;
-        c.strokeStyle = `rgba(255, 255, 255, ${0.35 * (1 - t * 0.5)})`;
+        const ec = this.elementColor();
+        c.globalAlpha = 0.35 * (1 - t * 0.5) * (ec ? 1.6 : 1);
+        c.strokeStyle = ec ?? '#ffffff';
         c.lineWidth = b.wkind === 'smash' ? 14 : 9;
         c.beginPath();
         c.arc(hx, hy, r, Math.min(a0, ang), Math.max(a0, ang));
         c.stroke();
+        c.globalAlpha = 1;
       }
     } else if (b.wkind === 'thrust') {
       reach += swinging ? Math.sin(t * Math.PI) * 26 : 0;
@@ -1538,6 +1766,27 @@ export class Game {
           c.fillText(`${cnt}`, x + 32, H - 16 - 8);
         }
         x += 34;
+      }
+    }
+
+    // 발동 중인 시너지 (아이템 칸 위)
+    if (this.syn.size > 0) {
+      c.font = this.font(14);
+      c.textAlign = 'left';
+      let x = 16;
+      const y = H - 16 - 46 - 26;
+      for (const id of this.syn) {
+        const name = SYN_NAME.get(id) ?? id;
+        const isSet = id.startsWith('set:');
+        const tw = c.measureText(name).width + 16;
+        c.fillStyle = 'rgba(16, 11, 14, 0.85)';
+        c.fillRect(x, y, tw, 20);
+        c.strokeStyle = isSet ? TAG_INFO[id.slice(4) as Tag].color : '#ffb35c';
+        c.lineWidth = 1.5;
+        c.strokeRect(x + 0.5, y + 0.5, tw - 1, 19);
+        c.fillStyle = isSet ? TAG_INFO[id.slice(4) as Tag].color : '#ffcf8a';
+        c.fillText(name, x + 8, y + 15);
+        x += tw + 6;
       }
     }
 

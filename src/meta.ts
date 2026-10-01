@@ -6,6 +6,7 @@ export interface Save {
   unlocked: string[];
   stats: Record<StatKey, number>;
   lastChar: string;
+  discovered: string[]; // 발견한 아이템 시너지 id
 }
 
 export interface RunResult {
@@ -34,6 +35,7 @@ export function defaultSave(): Save {
     unlocked: ALL_DEFS.filter((d) => !d.unlock).map((d) => d.id),
     stats: emptyStats(),
     lastChar: 'knight',
+    discovered: [],
   };
 }
 
@@ -48,6 +50,7 @@ export function loadSave(): Save {
       unlocked: [...unlocked],
       stats: { ...base.stats, ...(parsed.stats ?? {}) },
       lastChar: parsed.lastChar ?? base.lastChar,
+      discovered: parsed.discovered ?? [],
     };
   } catch {
     return base;
@@ -100,4 +103,12 @@ export function applyRunResult(save: Save, r: RunResult): AnyDef[] {
   save.lastChar = r.char;
   persist(save);
   return newly;
+}
+
+/** 처음 발동한 시너지를 기록한다. 새로 발견했으면 true. */
+export function discover(save: Save, id: string): boolean {
+  if (save.discovered.includes(id)) return false;
+  save.discovered.push(id);
+  persist(save);
+  return true;
 }
