@@ -35,7 +35,9 @@ button.danger { color: #ef9a9a; }
   background: #1a1d2e; border: 1px solid #2c3150; border-radius: 8px; padding: 10px; font-size: 13px;
   text-align: left; display: flex; flex-direction: column; gap: 4px;
 }
-.card .name { font-weight: bold; font-size: 14px; }
+.card .name { font-weight: bold; font-size: 14px; display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.icon { display: inline-block; }
+.credit { color: #5f6580; font-size: 11px; }
 .card.sel { border-color: #7986cb; box-shadow: 0 0 0 1px #7986cb; }
 .card.locked { opacity: 0.55; }
 .bar { height: 6px; background: #0007; border-radius: 3px; overflow: hidden; }

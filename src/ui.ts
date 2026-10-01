@@ -3,6 +3,9 @@ import {
 } from './content';
 import { isUnlocked, progressOf, type RunResult, type Save } from './meta';
 import type { Card } from './game';
+import { spriteStyle } from './sprites';
+
+const icon = (idx: number, px = 32) => `<i class="icon" style="${spriteStyle(idx, px)}"></i>`;
 
 const KIND_LABEL = { char: '캐릭터', item: '아이템', skill: '스킬' } as const;
 
@@ -35,7 +38,7 @@ export class UI {
     if (!open) {
       return `<div class="card locked"><div class="name">??? <span class="sub">${KIND_LABEL[d.kind]}</span></div>${this.lockInfo(save, d)}</div>`;
     }
-    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${d.name}</div><div>${d.desc}</div></div>`;
+    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${icon(d.sprite)}${d.name}</div><div>${d.desc}</div></div>`;
   }
 
   showMenu(save: Save, h: MenuHandlers, tab: 'play' | 'codex' = 'play', picked?: string) {
@@ -85,7 +88,7 @@ export class UI {
     const el = this.mount(
       `<h1>ROOM ${room} 클리어</h1><div class="sub">보상을 하나 선택하세요</div>
        <div class="rewards">${cards.map((c, i) =>
-         `<div class="card" data-i="${i}"><div class="name">${c.name}</div><div>${c.desc}</div></div>`).join('')}</div>`,
+         `<div class="card" data-i="${i}"><div class="name">${icon(c.sprite, 48)}${c.name}</div><div>${c.desc}</div></div>`).join('')}</div>`,
       'screen dim');
     el.querySelectorAll<HTMLElement>('[data-i]').forEach((b) =>
       b.addEventListener('click', () => onPick(cards[Number(b.dataset.i)])));
@@ -102,7 +105,7 @@ export class UI {
   showEnd(r: RunResult, newly: AnyDef[], save: Save, onMenu: () => void) {
     const list = newly.length
       ? `<h2 class="new">새로 해금됨</h2><div class="grid">${newly.map((d) =>
-          `<div class="card sel"><div class="name">${d.name}</div><div>${d.desc}</div></div>`).join('')}</div>`
+          `<div class="card sel"><div class="name">${icon(d.sprite)}${d.name}</div><div>${d.desc}</div></div>`).join('')}</div>`
       : `<div class="sub">이번 런에서 새로 해금된 항목은 없습니다.</div>`;
     const near = [...CHARACTERS, ...ITEMS, ...SKILLS]
       .filter((d) => d.unlock && !isUnlocked(save, d.id))

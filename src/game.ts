@@ -4,6 +4,7 @@ import {
 } from './content';
 import type { Input } from './input';
 import type { RunResult } from './meta';
+import { background, drawSprite } from './sprites';
 import { angDiff, clamp, dist, rand, shuffle } from './util';
 
 export const W = 960;
@@ -13,6 +14,12 @@ const FINAL_ROOM = 15;
 const BOSS_EVERY = 5;
 
 type EnemyKind = 'grunt' | 'archer' | 'charger' | 'swarm' | 'brute' | 'boss';
+
+const ENEMY_SPRITE: Record<Exclude<EnemyKind, 'boss'>, number> = {
+  grunt: 110, archer: 121, swarm: 120, charger: 123, brute: 109,
+};
+const BOSS_SPRITE = [0, 124, 122, 97];
+const BOSS_NAME = ['', '파수꾼', '군주', '심연의 왕'];
 
 interface EnemyStat { hp: number; r: number; speed: number; dmg: number; color: string; cost: number; minRoom: number }
 
@@ -55,6 +62,7 @@ interface Proj {
   pierce: number; bounce: number;
   hit: Set<number>;
   color: string;
+  sprite?: number;
 }
 
 interface Turret { x: number; y: number; t: number; cd: number }
@@ -70,6 +78,7 @@ export interface Card {
   id: string;
   name: string;
   desc: string;
+  sprite: number;
 }
 
 export interface GameEvents {
@@ -234,7 +243,7 @@ export class Game {
     const n = Math.min(5, this.m.choices);
     const cards: Card[] = [];
     if (this.p.hp / this.p.maxHp < 0.6) {
-      cards.push({ kind: 'heal', id: 'heal', name: '응급 치료', desc: '최대 체력의 40%를 회복합니다.' });
+      cards.push({ kind: 'heal', id: 'heal', sprite: 115, name: '응급 치료', desc: '최대 체력의 40%를 회복합니다.' });
     }
     const items = shuffle(ITEMS.filter((i) => this.unlocked.has(i.id)));
     const skills = shuffle(SKILLS.filter((s) => this.unlocked.has(s.id) && s.id !== this.p.skillId));
@@ -242,10 +251,10 @@ export class Game {
       const wantSkill = skills.length > 0 && (items.length === 0 || Math.random() < 0.25);
       if (wantSkill) {
         const s = skills.pop()!;
-        cards.push({ kind: 'skill', id: s.id, name: `[스킬] ${s.name}`, desc: `${s.desc} (쿨타임 ${s.cd}초, 현재 스킬 교체)` });
+        cards.push({ kind: 'skill', id: s.id, sprite: s.sprite, name: `[스킬] ${s.name}`, desc: `${s.desc} (쿨타임 ${s.cd}초, 현재 스킬 교체)` });
       } else {
         const i = items.pop()!;
-        cards.push({ kind: 'item', id: i.id, name: i.name, desc: i.desc });
+        cards.push({ kind: 'item', id: i.id, sprite: i.sprite, name: i.name, desc: i.desc });
       }
     }
     return cards;
@@ -455,6 +464,7 @@ export class Game {
         x: p.x + Math.cos(a) * 16, y: p.y + Math.sin(a) * 16,
         vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
         r, dmg, life, friendly: true, pierce, bounce: m.bounce, hit: new Set(), color,
+        sprite: c.weapon === 'pierce' ? undefined : c.weaponSprite,
       });
     }
   }
@@ -763,18 +773,18 @@ export class Game {
   render() {
     const c = this.ctx;
     c.clearRect(0, 0, W, H);
-    c.fillStyle = '#14151c';
-    c.fillRect(0, 0, W, H);
-    c.fillStyle = '#1c1e28';
-    c.fillRect(WALL, WALL, W - WALL * 2, H - WALL * 2);
-    c.strokeStyle = 'rgba(255,255,255,0.03)';
-    c.lineWidth = 1;
-    for (let x = WALL; x < W - WALL; x += 40) { c.beginPath(); c.moveTo(x, WALL); c.lineTo(x, H - WALL); c.stroke(); }
-    for (let y = WALL; y < H - WALL; y += 40) { c.beginPath(); c.moveTo(WALL, y); c.lineTo(W - WALL, y); c.stroke(); }
+    const bg = background(W, H, WALL);
+    if (bg) {
+      c.drawImage(bg, 0, 0);
+    } else {
+      c.fillStyle = '#14151c';
+      c.fillRect(0, 0, W, H);
+    }
 
     for (const t of this.turrets) {
-      c.fillStyle = '#ffd966';
-      c.fillRect(t.x - 8, t.y - 8, 16, 16);
+      drawSprite(c, 64, t.x, t.y, 30);
+      c.fillStyle = 'rgba(255, 217, 102, 0.8)';
+      c.fillRect(t.x - 14, t.y + 17, 28 * (t.t / 8), 3);
     }
 
     for (const e of this.enemies) {
@@ -786,24 +796,39 @@ export class Game {
         c.stroke();
         continue;
       }
-      c.fillStyle = e.flash > 0 ? '#ffffff' : e.state === 1 ? '#ffffff' : e.color;
+      const size = Math.max(24, e.r * 2.6);
+      c.fillStyle = 'rgba(0,0,0,0.3)';
       c.beginPath();
-      c.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+      c.ellipse(e.x, e.y + size * 0.42, size * 0.32, size * 0.1, 0, 0, Math.PI * 2);
       c.fill();
       if (e.burnT > 0) {
-        c.strokeStyle = '#ff9a3c';
-        c.lineWidth = 2;
-        c.stroke();
+        c.fillStyle = 'rgba(255, 140, 50, 0.35)';
+        c.beginPath();
+        c.arc(e.x, e.y, e.r + 4, 0, Math.PI * 2);
+        c.fill();
       }
+      const idx = e.kind === 'boss' ? BOSS_SPRITE[e.tier] : ENEMY_SPRITE[e.kind];
+      drawSprite(c, idx, e.x, e.y, size, { flip: this.p.x < e.x, flash: e.flash > 0 || e.state === 1 });
       if (e.kind !== 'boss' && e.hp < e.maxHp) {
         c.fillStyle = '#000a';
-        c.fillRect(e.x - e.r, e.y - e.r - 7, e.r * 2, 3);
+        c.fillRect(e.x - e.r, e.y - size / 2 - 6, e.r * 2, 3);
         c.fillStyle = '#7bd88f';
-        c.fillRect(e.x - e.r, e.y - e.r - 7, (e.r * 2 * Math.max(0, e.hp)) / e.maxHp, 3);
+        c.fillRect(e.x - e.r, e.y - size / 2 - 6, (e.r * 2 * Math.max(0, e.hp)) / e.maxHp, 3);
       }
     }
 
     for (const q of this.projs) {
+      if (q.sprite !== undefined) {
+        // 무기 스프라이트는 위쪽을 향하므로 진행 방향에 맞춰 90도 보정한다.
+        drawSprite(c, q.sprite, q.x, q.y, 22, { rot: Math.atan2(q.vy, q.vx) + Math.PI / 2 });
+        continue;
+      }
+      if (q.friendly && q.r >= 8) {
+        c.fillStyle = 'rgba(180, 160, 255, 0.35)';
+        c.beginPath();
+        c.arc(q.x, q.y, q.r * 1.8, 0, Math.PI * 2);
+        c.fill();
+      }
       c.fillStyle = q.color;
       c.beginPath();
       c.arc(q.x, q.y, q.r, 0, Math.PI * 2);
@@ -813,23 +838,27 @@ export class Game {
     const p = this.p;
     for (let i = 0; i < this.m.orbit; i++) {
       const a = p.orbitA + (i * Math.PI * 2) / this.m.orbit;
-      c.fillStyle = '#cfd8dc';
-      c.beginPath();
-      c.arc(p.x + Math.cos(a) * 58, p.y + Math.sin(a) * 58, 8, 0, Math.PI * 2);
-      c.fill();
+      drawSprite(c, 107, p.x + Math.cos(a) * 58, p.y + Math.sin(a) * 58, 24, { rot: a + Math.PI });
     }
     c.globalAlpha = p.invuln > 0 && Math.floor(p.invuln * 20) % 2 === 0 ? 0.4 : 1;
-    c.fillStyle = this.char.color;
+    const facingLeft = Math.cos(p.aim) < 0;
+    c.fillStyle = 'rgba(0,0,0,0.3)';
     c.beginPath();
-    c.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    c.ellipse(p.x, p.y + 14, 11, 4, 0, 0, Math.PI * 2);
     c.fill();
+    drawSprite(c, this.char.sprite, p.x, p.y, 34, { flip: facingLeft });
+    if (this.char.weapon !== 'spread' && this.char.weapon !== 'bolt') {
+      drawSprite(c, this.char.weaponSprite, p.x + Math.cos(p.aim) * 18, p.y + Math.sin(p.aim) * 18, 22,
+        { rot: p.aim + Math.PI / 2 });
+    }
     c.globalAlpha = 1;
-    c.strokeStyle = '#fff';
-    c.lineWidth = 3;
-    c.beginPath();
-    c.moveTo(p.x + Math.cos(p.aim) * p.r, p.y + Math.sin(p.aim) * p.r);
-    c.lineTo(p.x + Math.cos(p.aim) * (p.r + 9), p.y + Math.sin(p.aim) * (p.r + 9));
-    c.stroke();
+    if (p.rageT > 0) {
+      c.strokeStyle = 'rgba(255, 80, 60, 0.7)';
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(p.x, p.y, p.r + 10, 0, Math.PI * 2);
+      c.stroke();
+    }
     if (p.shieldT > 0) {
       c.strokeStyle = '#7fd1ff';
       c.lineWidth = 3;
@@ -911,7 +940,7 @@ export class Game {
       c.fillRect(W / 2 - 200, 40, 400 * Math.max(0, boss.hp / boss.maxHp), 12);
       c.textAlign = 'center';
       c.fillStyle = '#fff';
-      c.fillText(['', '파수꾼', '군주', '심연의 왕'][boss.tier], W / 2, 36);
+      c.fillText(BOSS_NAME[boss.tier], W / 2, 36);
     }
 
     if (this.bannerT > 0) {
