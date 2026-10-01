@@ -119,7 +119,13 @@ export interface GameEvents {
   onPause(paused: boolean): void;
 }
 
-type Phase = 'playing' | 'cleared' | 'reward' | 'ended';
+type Phase = 'playing' | 'cleared' | 'exiting' | 'reward' | 'ended';
+
+/** 출구 연출 시간(초): 점프 → 구멍으로 하강 → 암전 */
+const HOP_T = 0.38;
+const SINK_T = 0.45;
+const EXIT_T = 1.05;
+const ENTER_T = 0.5; // 새 방에 떨어져 내려오는 시간
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
@@ -143,6 +149,12 @@ export class Game {
   private parts: Particle[] = [];
   private shake = 0;
   private hurtFlash = 0; // 피격 시 화면 붉은 번쩍임
+  private exitT = 0; // 출구 연출 경과 시간
+  private exitFrom = { x: 0, y: 0 };
+  private hop = 0; // 점프 높이(px)
+  private sink = 0; // 구멍으로 내려간 깊이(px)
+  private fade = 0; // 화면 암전(0~1)
+  private enterT = 0; // 새 방 입장 낙하 남은 시간
 
   private enemies: Enemy[] = [];
   private projs: Proj[] = [];
@@ -192,6 +204,9 @@ export class Game {
     this.p.x = W / 2;
     this.p.y = H / 2;
     this.bannerT = 1.6;
+    this.enterT = ENTER_T;
+    this.hop = 0;
+    this.sink = 0;
     this.waves = this.buildWaves(n);
     this.spawnWave();
   }
@@ -325,7 +340,7 @@ export class Game {
   // ---------- 갱신 ----------
 
   update(dtRaw: number) {
-    if (this.input.takePause() && this.phase !== 'ended' && this.phase !== 'reward') {
+    if (this.input.takePause() && this.phase !== 'ended' && this.phase !== 'reward' && this.phase !== 'exiting') {
       this.paused = !this.paused;
       this.ev.onPause(this.paused);
     }
@@ -338,6 +353,20 @@ export class Game {
 
     this.updateFx(dt);
     if (this.phase === 'reward') return;
+    if (this.phase === 'exiting') {
+      this.updateExit(dt);
+      return;
+    }
+    if (this.fade > 0) this.fade = Math.max(0, this.fade - dt * 2.2);
+    this.bannerT = Math.max(0, this.bannerT - dt);
+    if (this.enterT > 0) {
+      this.enterT -= dt;
+      if (this.enterT <= 0) {
+        // 착지: 먼지와 약한 흔들림
+        this.burst(this.p.x, this.p.y + this.p.r, 14, '#9a8a78', 140, { size: 4, life: 0.45, glow: false, grav: -30 });
+        this.shake = Math.max(this.shake, 4);
+      }
+    }
 
     if (this.phase === 'cleared') {
       this.updatePlayer(dt);
@@ -345,17 +374,15 @@ export class Game {
       this.updateDrops(dt);
       // 출구(사다리)에 올라서면 다음 단계로
       if (dist(this.p.x, this.p.y, EXIT.x, EXIT.y) < 24) {
-        if (this.room >= FINAL_ROOM) {
-          this.finish(true);
-        } else {
-          this.phase = 'reward';
-          this.ev.onReward(this.rollCards(), this.room);
-        }
+        this.phase = 'exiting';
+        this.exitT = 0;
+        this.exitFrom = { x: this.p.x, y: this.p.y };
+        this.p.swingT = 0;
+        this.near = null;
       }
       return;
     }
 
-    this.bannerT = Math.max(0, this.bannerT - dt);
     const slow = this.p.slowT > 0 ? 0.4 : 1;
     this.updatePlayer(dt);
     this.updateTurrets(dt);
@@ -368,6 +395,44 @@ export class Game {
     if (this.phase === 'playing' && this.enemies.length === 0) {
       if (this.waves.length > 0) this.spawnWave();
       else this.roomCleared();
+    }
+  }
+
+  /** 출구 연출: 구멍 위로 살짝 뛰어올라 들어간 뒤 화면이 어두워진다. */
+  private updateExit(dt: number) {
+    const p = this.p;
+    const before = this.exitT;
+    this.exitT += dt;
+    const t = this.exitT;
+    // 발이 구멍 가장자리에 닿도록 착지 지점을 잡는다.
+    const tx = EXIT.x;
+    const ty = EXIT.y - p.r + 2;
+    if (t < HOP_T) {
+      const k = t / HOP_T;
+      p.x = this.exitFrom.x + (tx - this.exitFrom.x) * k;
+      p.y = this.exitFrom.y + (ty - this.exitFrom.y) * k;
+      this.hop = Math.sin(k * Math.PI) * 30;
+      p.moving = true;
+    } else {
+      p.x = tx;
+      p.y = ty;
+      this.hop = 0;
+      p.moving = false;
+      if (before < HOP_T) {
+        this.burst(tx, EXIT.y, 10, '#9a8a78', 110, { size: 3, life: 0.4, glow: false, grav: -20 });
+      }
+      const k = Math.min(1, (t - HOP_T) / SINK_T);
+      this.sink = k * k * 70;
+    }
+    this.fade = Math.max(0, Math.min(1, (t - 0.7) / (EXIT_T - 0.7)));
+    if (t >= EXIT_T) {
+      this.fade = 1;
+      if (this.room >= FINAL_ROOM) {
+        this.finish(true);
+      } else {
+        this.phase = 'reward';
+        this.ev.onReward(this.rollCards(), this.room);
+      }
     }
   }
 
@@ -480,6 +545,8 @@ export class Game {
       p.x += p.dashX * 700 * dt;
       this.burst(p.x, p.y + p.r, 1, '#8a7a6a', 30, { size: 3, life: 0.35, glow: false, grav: -20 });
       p.y += p.dashY * 700 * dt;
+    } else if (this.enterT > 0) {
+      p.moving = false;
     } else {
       const a = this.input.axis();
       p.moving = a.x !== 0 || a.y !== 0;
@@ -493,7 +560,7 @@ export class Game {
     if (this.input.takeSkill() && p.skillCd <= 0) this.useSkill();
 
     const rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1);
-    if (this.input.down && p.atkCd <= 0) {
+    if (this.input.down && p.atkCd <= 0 && this.enterT <= 0) {
       p.atkCd = this.weapon.base.cd / rate;
       this.attack(p.atkCd);
     }
@@ -966,13 +1033,13 @@ export class Game {
       c.fillRect(0, 0, W, H);
     }
 
-    if (this.phase === 'cleared' || this.phase === 'reward') {
+    if (this.phase === 'cleared' || this.phase === 'exiting' || this.phase === 'reward') {
       const pulse = 0.5 + 0.5 * Math.sin(this.time * 4);
-      c.fillStyle = `rgba(255, 230, 140, ${0.15 + 0.15 * pulse})`;
+      c.fillStyle = `rgba(255, 230, 140, ${0.12 + 0.12 * pulse})`;
       c.beginPath();
-      c.arc(EXIT.x, EXIT.y, 26, 0, Math.PI * 2);
+      c.ellipse(EXIT.x, EXIT.y + 4, 34, 22, 0, 0, Math.PI * 2);
       c.fill();
-      drawSprite(c, 'ladder', EXIT.x, EXIT.y, 2.5);
+      drawSprite(c, 'ladder', EXIT.x, EXIT.y, 3);
     }
 
     for (const d of this.drops) {
@@ -1072,16 +1139,30 @@ export class Game {
     }
     c.globalAlpha = p.invuln > 0 && Math.floor(p.invuln * 20) % 2 === 0 ? 0.4 : 1;
     const facingLeft = Math.cos(p.aim) < 0;
-    c.fillStyle = 'rgba(0,0,0,0.3)';
-    c.beginPath();
-    c.ellipse(p.x, p.y + p.r, 11, 4, 0, 0, Math.PI * 2);
-    c.fill();
-    drawSprite(c, this.char.sprite, p.x, p.y + p.r, 2.5, {
+    // 공중에 뜬 높이: 출구 점프, 또는 새 방에 떨어져 내려오는 중
+    const drop = this.enterT > 0 ? (this.enterT / ENTER_T) ** 2 * 140 : 0;
+    const air = this.hop + drop;
+    const shadowK = 1 - Math.min(0.6, air / 120);
+    if (this.sink <= 0) {
+      c.fillStyle = `rgba(0,0,0,${0.3 * shadowK})`;
+      c.beginPath();
+      c.ellipse(p.x, p.y + p.r, 11 * shadowK, 4 * shadowK, 0, 0, Math.PI * 2);
+      c.fill();
+    }
+    if (this.sink > 0) {
+      // 구멍 가장자리 아래로 내려간 부분은 보이지 않게 자른다.
+      c.save();
+      c.beginPath();
+      c.rect(0, 0, W, EXIT.y + 3);
+      c.clip();
+    }
+    drawSprite(c, this.char.sprite, p.x, p.y + p.r - air + this.sink, 2.5, {
       anchor: 'feet',
       frame: animFrame(this.char.sprite, this.time, p.moving || p.dashT > 0, 10),
       flip: facingLeft,
     });
-    this.renderWeapon(c);
+    if (this.sink > 0) c.restore();
+    if (this.phase !== 'exiting' && this.enterT <= 0) this.renderWeapon(c);
     c.globalAlpha = 1;
     if (p.rageT > 0) {
       c.strokeStyle = 'rgba(255, 80, 60, 0.7)';
@@ -1157,6 +1238,11 @@ export class Game {
     }
 
     this.renderHud();
+
+    if (this.fade > 0) {
+      c.fillStyle = `rgba(0, 0, 0, ${this.fade})`;
+      c.fillRect(0, 0, W, H);
+    }
   }
 
   private renderLighting(c: CanvasRenderingContext2D, dark: number, glow: [number, number, number]) {
@@ -1184,7 +1270,7 @@ export class Game {
         colored.push({ x: d.x, y: d.y, r: 40, rgb, a: 0.3 });
       }
     }
-    if (this.phase === 'cleared' || this.phase === 'reward') {
+    if (this.phase === 'cleared' || this.phase === 'exiting' || this.phase === 'reward') {
       lights.push({ x: EXIT.x, y: EXIT.y, r: 140 });
       colored.push({ x: EXIT.x, y: EXIT.y, r: 90, rgb: [255, 220, 130], a: 0.3 });
     }
