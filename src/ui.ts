@@ -3,10 +3,11 @@ import {
 } from './content';
 import { isUnlocked, progressOf, type RunResult, type Save } from './meta';
 import type { Card } from './game';
-import { spriteStyle, type IconRef } from './sprites';
+import { paintGenIcons } from './icons';
+import { iconHtml, type IconRef } from './sprites';
 import { ARMORS, RARITY, SLOT_LABEL, WEAPONS, gearLines, gearTitle, type Gear, type Slot } from './gear';
 
-const icon = (key: IconRef, px = 32) => `<span class="icon"><i style="${spriteStyle(key, px)}"></i></span>`;
+const icon = (key: IconRef, px = 32) => `<span class="icon">${iconHtml(key, px)}</span>`;
 
 const KIND_LABEL = { char: '캐릭터', item: '아이템', skill: '스킬', gear: '장비' } as const;
 
@@ -20,7 +21,9 @@ export class UI {
 
   private mount(html: string, cls = 'screen'): HTMLElement {
     this.root.innerHTML = `<div class="${cls}">${html}</div>`;
-    return this.root.firstElementChild as HTMLElement;
+    const el = this.root.firstElementChild as HTMLElement;
+    paintGenIcons(el);
+    return el;
   }
 
   hide() {

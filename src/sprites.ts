@@ -1,6 +1,6 @@
 // 스프라이트 시트 로드와 그리기
 import sheetUrl from './assets/dungeon-tileset-ii.png';
-import { GEN_SIZE, genCanvas, genUrl, isGenKey, type GenKey } from './icons';
+import { GEN_SIZE, genCanvas, isGenKey, type GenKey } from './icons';
 import { S, type SpriteKey, type Spr } from './spritesheet';
 
 /** 시트 스프라이트 또는 코드로 그린 아이콘 */
@@ -69,18 +69,21 @@ export function drawIcon(c: CanvasRenderingContext2D, ref: IconRef, x: number, y
   drawSprite(c, ref, x, y, size / Math.max(s.w, s.h));
 }
 
-/** DOM 요소에 아이콘을 px 크기 상자에 맞춰 표시하는 인라인 스타일 */
-export function spriteStyle(ref: IconRef, px: number): string {
+/**
+ * DOM에 아이콘을 px 크기 상자에 맞춰 표시하는 HTML.
+ * 코드로 그린 아이콘은 canvas로 내보내고, 붙인 뒤 paintGenIcons로 칠한다.
+ */
+export function iconHtml(ref: IconRef, px: number): string {
   if (isGenKey(ref)) {
     const k = Math.floor(px / GEN_SIZE);
-    return `width:${GEN_SIZE * k}px;height:${GEN_SIZE * k}px;flex:none;background-image:url(${genUrl(ref)});` +
-      `background-size:100% 100%;image-rendering:pixelated`;
+    return `<canvas data-gen="${ref}" width="${GEN_SIZE}" height="${GEN_SIZE}" ` +
+      `style="width:${GEN_SIZE * k}px;height:${GEN_SIZE * k}px;image-rendering:pixelated"></canvas>`;
   }
   const s: Spr = S[ref];
   const k = Math.floor(px / Math.max(s.w, s.h)) || px / Math.max(s.w, s.h);
-  return `width:${s.w * k}px;height:${s.h * k}px;flex:none;background-image:url(${sheetUrl});` +
+  return `<i style="width:${s.w * k}px;height:${s.h * k}px;flex:none;background-image:url(${sheetUrl});` +
     `background-size:${SHEET * k}px ${SHEET * k}px;background-position:-${s.x * k}px -${s.y * k}px;` +
-    'background-repeat:no-repeat;image-rendering:pixelated';
+    'background-repeat:no-repeat;image-rendering:pixelated"></i>';
 }
 
 /** 바닥과 벽을 미리 그려둔 배경 캔버스. 시트가 로드되기 전에는 null. */

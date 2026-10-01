@@ -79,7 +79,6 @@ export const GEN_SIZE = 12;
 export const isGenKey = (k: string): k is GenKey => k in GEN;
 
 const cache = new Map<GenKey, HTMLCanvasElement>();
-const urlCache = new Map<GenKey, string>();
 
 /** 아이콘 하나를 12x12 캔버스로 만든다(캐시). */
 export function genCanvas(key: GenKey): HTMLCanvasElement {
@@ -104,11 +103,14 @@ export function genCanvas(key: GenKey): HTMLCanvasElement {
   return cv;
 }
 
-export function genUrl(key: GenKey): string {
-  let u = urlCache.get(key);
-  if (!u) {
-    u = genCanvas(key).toDataURL();
-    urlCache.set(key, u);
-  }
-  return u;
+/** root 안의 canvas[data-gen] 요소에 해당 아이콘을 그린다(DOM 표시용). */
+export function paintGenIcons(root: ParentNode) {
+  root.querySelectorAll<HTMLCanvasElement>('canvas[data-gen]').forEach((cv) => {
+    const key = cv.dataset.gen ?? '';
+    if (!isGenKey(key)) return;
+    const c = cv.getContext('2d')!;
+    c.imageSmoothingEnabled = false;
+    c.clearRect(0, 0, cv.width, cv.height);
+    c.drawImage(genCanvas(key), 0, 0);
+  });
 }
