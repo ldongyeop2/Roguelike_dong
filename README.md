@@ -8,10 +8,10 @@
 npm install
 npm run dev      # 개발 서버 (http://localhost:5173)
 npm run build    # 타입 검사 + 프로덕션 빌드 (dist/)
-npm run build:single  # 호스팅용 페이지 (dist/play.html + dist/sprite-0.png)
+npm run build:single  # 호스팅용 페이지 (dist/play.html + app.js + sprite-0.png)
 ```
 
-`dist/play.html`은 CSS와 JS를 인라인한 페이지이고, 스프라이트 시트는 같은 폴더의 `sprite-0.png`를 상대 경로로 읽습니다. `<html>`, `<head>`, `<body>` 태그가 없습니다. 호스팅 환경이 문서 골격을 씌워 주는 경우에 맞춘 형태입니다. 브라우저에서 파일을 직접 열 때는 `npm run dev`나 `npm run preview`를 쓰세요.
+`dist/play.html`은 CSS만 인라인한 작은 페이지이고, 게임 코드(`app.js`)와 스프라이트 시트(`sprite-0.png`)를 같은 폴더에서 상대 경로로 읽습니다. 호스팅 환경이 문서 골격을 씌워 주는 경우에 맞춰 `<html>`, `<head>`, `<body>` 태그가 없습니다. 브라우저에서 직접 실행할 때는 `npm run dev`나 `npm run preview`를 쓰세요.
 
 ## 조작
 
