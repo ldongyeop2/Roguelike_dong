@@ -86,6 +86,9 @@ export const S = {
   banner_green: tile(16, 48),
   banner_yellow: tile(32, 48),
   pillar: tile(80, 80, 16, 40),
+  skull: tile(292, 438, 8, 8),
+  fountain_mid_blue: { x: 64, y: 48, w: 16, h: 16, n: 3 },
+  fountain_basin_blue: { x: 64, y: 64, w: 16, h: 16, n: 3 },
 } satisfies Record<string, Spr>;
 
 export type SpriteKey = keyof typeof S;

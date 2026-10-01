@@ -8,13 +8,16 @@ import {
 } from './gear';
 import type { Input } from './input';
 import type { RunResult } from './meta';
-import { animFrame, background, drawIcon, drawSprite, type IconRef } from './sprites';
+import { FOUNTAIN_X, buildRoom, drawLighting, drawWallAnim, themeForRoom, type Light } from './room';
+import { animFrame, drawIcon, drawSprite, type IconRef } from './sprites';
 import { S, type SpriteKey } from './spritesheet';
 import { angDiff, clamp, dist, rand, shuffle } from './util';
 
 export const W = 960;
 export const H = 640;
 const WALL = 28;
+/** 위쪽 벽은 장식을 위해 더 두껍다. 바닥(플레이 영역)은 y >= TOP. */
+export const TOP = 84;
 const FINAL_ROOM = 15;
 const BOSS_EVERY = 5;
 
@@ -34,9 +37,15 @@ const DROP_CHANCE: Record<EnemyKind, number> = {
 const SWING_TIME: Record<WeaponKind, number> = {
   slash: 0.16, thrust: 0.14, smash: 0.24, bow: 0.18, staff: 0.2,
 };
-const EXIT = { x: W / 2, y: WALL + 34 }; // 방 클리어 후 나타나는 출구(사다리)
+const EXIT = { x: W / 2, y: TOP + 18 }; // 방 클리어 후 나타나는 출구(사다리)
 
 interface Drop { x: number; y: number; gear: Gear; t: number }
+
+interface Particle {
+  x: number; y: number; vx: number; vy: number;
+  life: number; max: number; size: number; color: string;
+  grav: number; glow: boolean;
+}
 
 const ZERO_STATS = (): Required<GearStats> => ({
   dmgPct: 0, rate: 0, speed: 0, maxHp: 0, armor: 0, crit: 0, lifesteal: 0, regen: 0, skillCd: 0,
@@ -93,6 +102,7 @@ interface Fx {
   kind: 'ring' | 'arc' | 'text';
   x: number; y: number; t: number; life: number;
   r?: number; a?: number; arc?: number; text?: string; color: string;
+  big?: boolean;
 }
 
 export interface Card {
@@ -130,6 +140,9 @@ export class Game {
   private drops: Drop[] = [];
   private near: Drop | null = null; // 플레이어 가까이 있는 드랍
   private pickedUids = new Set<number>();
+  private parts: Particle[] = [];
+  private shake = 0;
+  private hurtFlash = 0; // 피격 시 화면 붉은 번쩍임
 
   private enemies: Enemy[] = [];
   private projs: Proj[] = [];
@@ -216,7 +229,7 @@ export class Game {
       let y = 0;
       for (let tries = 0; tries < 20; tries++) {
         x = rand(WALL + 30, W - WALL - 30);
-        y = rand(WALL + 30, H - WALL - 30);
+        y = rand(TOP + 30, H - WALL - 30);
         if (dist(x, y, this.p.x, this.p.y) > 220) break;
       }
       this.enemies.push(this.makeEnemy(kind, x, y, hpMul));
@@ -249,7 +262,7 @@ export class Game {
     this.projs = this.projs.filter((q) => q.friendly);
     // 방마다 장비 하나는 보장한다.
     this.spawnDrop(W / 2, H / 2 + 40, this.room % BOSS_EVERY === 0 ? 2 : 0);
-    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 40, t: 0, life: 1.6, text: 'CLEAR', color: '#fff' });
+    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 40, t: 0, life: 1.8, text: 'ROOM CLEAR', color: '#ffd27a', big: true });
   }
 
   abandon(): RunResult {
@@ -401,7 +414,7 @@ export class Game {
     const gear = makeGear(base, rollRarity(this.room, minRarity), this.room);
     this.drops.push({
       x: clamp(x + rand(-12, 12), WALL + 20, W - WALL - 20),
-      y: clamp(y + rand(-12, 12), WALL + 20, H - WALL - 20),
+      y: clamp(y + rand(-12, 12), TOP + 20, H - WALL - 20),
       gear, t: rand(0, 3),
     });
   }
@@ -465,6 +478,7 @@ export class Game {
     if (p.dashT > 0) {
       p.dashT -= dt;
       p.x += p.dashX * 700 * dt;
+      this.burst(p.x, p.y + p.r, 1, '#8a7a6a', 30, { size: 3, life: 0.35, glow: false, grav: -20 });
       p.y += p.dashY * 700 * dt;
     } else {
       const a = this.input.axis();
@@ -474,7 +488,7 @@ export class Game {
       p.y += a.y * sp * dt;
     }
     p.x = clamp(p.x, WALL + p.r, W - WALL - p.r);
-    p.y = clamp(p.y, WALL + p.r, H - WALL - p.r);
+    p.y = clamp(p.y, TOP + p.r, H - WALL - p.r);
 
     if (this.input.takeSkill() && p.skillCd <= 0) this.useSkill();
 
@@ -581,6 +595,8 @@ export class Game {
       });
     }
     if (b.wkind === 'smash') {
+      this.shake = Math.max(this.shake, 3);
+      this.burst(p.x + ax * range * 0.7, p.y + ay * range * 0.7, 8, '#bfae94', 120, { size: 3, life: 0.4, glow: false });
       this.fx.push({ kind: 'ring', x: p.x + ax * range * 0.7, y: p.y + ay * range * 0.7, t: 0, life: 0.25, r: 34, color: '#e8d8b0' });
     }
   }
@@ -682,7 +698,7 @@ export class Game {
         }
       }
       e.x = clamp(e.x, WALL + e.r, W - WALL - e.r);
-      e.y = clamp(e.y, WALL + e.r, H - WALL - e.r);
+      e.y = clamp(e.y, TOP + e.r, H - WALL - e.r);
 
       if (d < e.r + p.r) this.hurtPlayer(e.dmg, e);
     }
@@ -756,7 +772,7 @@ export class Game {
     for (let i = 0; i < n; i++) {
       const a = rand(0, Math.PI * 2);
       this.enemies.push(this.makeEnemy(kind, clamp(e.x + Math.cos(a) * 80, WALL + 20, W - WALL - 20),
-        clamp(e.y + Math.sin(a) * 80, WALL + 20, H - WALL - 20), hpMul));
+        clamp(e.y + Math.sin(a) * 80, TOP + 20, H - WALL - 20), hpMul));
     }
   }
 
@@ -776,7 +792,7 @@ export class Game {
       q.life -= dt;
       const minX = WALL;
       const maxX = W - WALL;
-      const minY = WALL;
+      const minY = TOP - 10;
       const maxY = H - WALL;
       if (q.x < minX || q.x > maxX || q.y < minY || q.y > maxY) {
         if (q.friendly && q.bounce > 0) {
@@ -817,6 +833,10 @@ export class Game {
     if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= 2; crit = true; }
     e.hp -= d;
     e.flash = 0.1;
+    if (fromPlayer) {
+      const a = Math.atan2(e.y - this.p.y, e.x - this.p.x);
+      this.burst(e.x, e.y, crit ? 8 : 4, crit ? '#ffd24a' : '#fff1c8', crit ? 260 : 180, { dir: a, spread: 0.9, size: 2, life: 0.25 });
+    }
     this.fx.push({
       kind: 'text', x: e.x + rand(-8, 8), y: e.y - e.r, t: 0, life: 0.5,
       text: String(Math.round(d)), color: crit ? '#ffd24a' : '#ffffff',
@@ -834,6 +854,9 @@ export class Game {
     e.dead = true;
     this.kills++;
     this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.25, r: e.r + 10, color: e.color });
+    this.burst(e.x, e.y, 10 + Math.floor(e.r / 2), e.color, 160, { size: 3, life: 0.5, grav: 120 });
+    this.burst(e.x, e.y, 6, 'rgba(120,110,120,0.7)', 40, { size: 5, life: 0.7, grav: -40, glow: false });
+    if (e.kind === 'brute') this.shake = Math.max(this.shake, 4);
     if (Math.random() < DROP_CHANCE[e.kind]) this.spawnDrop(e.x, e.y, e.kind === 'boss' ? 2 : 0);
     if (this.m.explode > 0) {
       const R = 60 + this.m.explode * 10;
@@ -844,6 +867,8 @@ export class Game {
       }
     }
     if (e.kind === 'boss') {
+      this.shake = 14;
+      this.burst(e.x, e.y, 60, '#ffb35c', 320, { size: 4, life: 0.9, grav: 80 });
       this.bossKills++;
       this.projs = this.projs.filter((q) => q.friendly);
       for (const o of this.enemies) if (!o.dead) o.dead = true; // 소환수 정리
@@ -864,6 +889,9 @@ export class Game {
     const taken = Math.max(1, dmg * (1 - armor / (armor + 15)));
     p.hp -= taken;
     p.invuln = 0.7;
+    this.shake = Math.max(this.shake, 7);
+    this.hurtFlash = 1;
+    this.burst(p.x, p.y - 8, 10, '#ff4a4a', 180, { size: 3, life: 0.4, grav: 200 });
     this.fx.push({ kind: 'text', x: p.x, y: p.y - 20, t: 0, life: 0.6, text: `-${Math.round(taken)}`, color: '#ff6b6b' });
     if (this.m.thorns > 0) {
       const R = 90;
@@ -887,16 +915,52 @@ export class Game {
   private updateFx(dt: number) {
     for (const f of this.fx) f.t += dt;
     this.fx = this.fx.filter((f) => f.t < f.life).slice(-200);
+    for (const q of this.parts) {
+      q.life += dt;
+      q.vy += q.grav * dt;
+      q.x += q.vx * dt;
+      q.y += q.vy * dt;
+      q.vx *= Math.exp(-3 * dt);
+      q.vy *= Math.exp(-3 * dt);
+    }
+    this.parts = this.parts.filter((q) => q.life < q.max).slice(-400);
+    this.shake *= Math.exp(-10 * dt);
+    this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5);
+    // 희귀 이상 장비는 반짝인다.
+    for (const d of this.drops) {
+      if (d.gear.rarity >= 2 && Math.random() < dt * 4) {
+        this.burst(d.x + rand(-10, 10), d.y + rand(-12, 6), 1, RARITY[d.gear.rarity].color, 20, { grav: -30, size: 2, life: 0.8 });
+      }
+    }
+  }
+
+  /** 입자 n개를 뿌린다. */
+  private burst(
+    x: number, y: number, n: number, color: string, speed: number,
+    o: { grav?: number; size?: number; life?: number; dir?: number; spread?: number; glow?: boolean } = {},
+  ) {
+    for (let i = 0; i < n; i++) {
+      const a = o.dir !== undefined ? o.dir + rand(-(o.spread ?? 0.6), o.spread ?? 0.6) : rand(0, Math.PI * 2);
+      const v = speed * rand(0.4, 1);
+      this.parts.push({
+        x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0, max: (o.life ?? 0.45) * rand(0.7, 1.2),
+        size: o.size ?? 3, color, grav: o.grav ?? 0, glow: o.glow ?? true,
+      });
+    }
   }
 
   // ---------- 렌더 ----------
 
   render() {
     const c = this.ctx;
+    const theme = themeForRoom(this.room);
     c.clearRect(0, 0, W, H);
-    const bg = background(W, H, WALL);
+    c.save();
+    if (this.shake > 0.3) c.translate(rand(-1, 1) * this.shake, rand(-1, 1) * this.shake);
+    const bg = buildRoom(W, H, TOP, WALL, theme, this.room);
     if (bg) {
       c.drawImage(bg, 0, 0);
+      drawWallAnim(c, this.time, TOP, theme);
     } else {
       c.fillStyle = '#14151c';
       c.fillRect(0, 0, W, H);
@@ -935,11 +999,24 @@ export class Game {
 
     for (const e of this.enemies) {
       if (e.spawnT > 0) {
-        c.strokeStyle = 'rgba(255,90,90,0.8)';
-        c.lineWidth = 2;
+        // 소환 마법진: 점선 원이 돌며 좁혀진다
+        const k = Math.max(0, e.spawnT);
+        c.save();
+        c.translate(e.x, e.y + e.r * 0.6);
+        c.scale(1, 0.45);
+        c.rotate(this.time * 3);
+        c.strokeStyle = `rgba(255, 70, 70, ${0.9 - k * 0.4})`;
+        c.lineWidth = 3;
+        c.setLineDash([8, 6]);
         c.beginPath();
-        c.arc(e.x, e.y, e.r + (e.spawnT % 0.3) * 20, 0, Math.PI * 2);
+        c.arc(0, 0, e.r + 10 + k * 18, 0, Math.PI * 2);
         c.stroke();
+        c.setLineDash([]);
+        c.fillStyle = 'rgba(255, 40, 40, 0.18)';
+        c.beginPath();
+        c.arc(0, 0, e.r + 6, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
         continue;
       }
       const key = e.kind === 'boss' ? BOSS_SPRITE[e.tier] : ENEMY_SPRITE[e.kind];
@@ -1022,6 +1099,7 @@ export class Game {
     }
 
     for (const f of this.fx) {
+      if (f.kind === 'text') continue;
       const k = f.t / f.life;
       c.globalAlpha = 1 - k;
       if (f.kind === 'ring') {
@@ -1030,27 +1108,93 @@ export class Game {
         c.beginPath();
         c.arc(f.x, f.y, (f.r ?? 20) * (0.4 + 0.6 * k), 0, Math.PI * 2);
         c.stroke();
-      } else if (f.kind === 'arc') {
-        c.globalAlpha = (1 - k) * 0.45;
-        c.fillStyle = f.color;
-        c.beginPath();
-        c.moveTo(f.x, f.y);
-        c.arc(f.x, f.y, f.r ?? 60, (f.a ?? 0) - (f.arc ?? 1) / 2, (f.a ?? 0) + (f.arc ?? 1) / 2);
-        c.closePath();
-        c.fill();
-      } else {
-        c.fillStyle = f.color;
-        c.font = '10px "Press Start 2P", monospace';
-        c.textAlign = 'center';
-        c.fillText(f.text ?? '', f.x, f.y - k * 16);
       }
       c.globalAlpha = 1;
+    }
+
+    this.renderLighting(c, theme.dark, theme.glow);
+
+    // 입자(빛나는 입자는 가산 혼합)
+    for (const q of this.parts) {
+      const k = q.life / q.max;
+      c.globalAlpha = 1 - k;
+      c.globalCompositeOperation = q.glow ? 'lighter' : 'source-over';
+      c.fillStyle = q.color;
+      const sz = q.size * (q.glow ? 1 : 1 + k);
+      c.fillRect(q.x - sz / 2, q.y - sz / 2, sz, sz);
+    }
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'source-over';
+
+    // 피해 숫자: 위로 튀었다가 사라진다
+    c.textAlign = 'center';
+    c.strokeStyle = 'rgba(0,0,0,0.85)';
+    for (const f of this.fx) {
+      if (f.kind !== 'text') continue;
+      const k = f.t / f.life;
+      const lift = f.big ? 0 : Math.sin(Math.min(1, k * 2) * Math.PI / 2) * 18;
+      c.globalAlpha = k > 0.7 ? (1 - k) / 0.3 : 1;
+      // 숫자는 픽셀 글꼴, 한글 문구는 한글 글꼴
+      const numeric = /^[-+\d]+$/.test(f.text ?? '');
+      c.font = f.big ? '30px "Press Start 2P", monospace' : numeric ? '10px "Press Start 2P", monospace' : this.font(17);
+      c.lineWidth = f.big ? 7 : 3;
+      c.strokeText(f.text ?? '', f.x, f.y - lift);
+      c.fillStyle = f.color;
+      c.fillText(f.text ?? '', f.x, f.y - lift);
+    }
+    c.globalAlpha = 1;
+    c.restore();
+
+    // 체력이 낮거나 맞았을 때 화면 가장자리가 붉게
+    const low = this.p.hp / this.p.maxHp < 0.3 ? 0.35 + 0.15 * Math.sin(this.time * 6) : 0;
+    const red = Math.max(low, this.hurtFlash * 0.45);
+    if (red > 0.01) {
+      const v = c.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.85);
+      v.addColorStop(0, 'rgba(200, 0, 0, 0)');
+      v.addColorStop(1, `rgba(200, 0, 0, ${red})`);
+      c.fillStyle = v;
+      c.fillRect(0, 0, W, H);
     }
 
     this.renderHud();
   }
 
-  /** 장착 무기를 휘두르는 모습. 손잡이를 축으로 회전시킨다. */
+  private renderLighting(c: CanvasRenderingContext2D, dark: number, glow: [number, number, number]) {
+    const p = this.p;
+    const lights: Light[] = [{ x: p.x, y: p.y - 10, r: 250 + Math.sin(this.time * 3) * 6 }];
+    const colored: (Light & { rgb: [number, number, number]; a: number })[] = [];
+    for (const [i, x] of FOUNTAIN_X.entries()) {
+      const flick = 0.9 + 0.1 * Math.sin(this.time * 9 + i * 2);
+      lights.push({ x, y: TOP + 10, r: 170 * flick });
+      colored.push({ x, y: TOP - 10, r: 150 * flick, rgb: glow, a: 0.28 });
+    }
+    for (const q of this.projs) {
+      if (q.friendly && q.r >= 8) {
+        lights.push({ x: q.x, y: q.y, r: 70 });
+        colored.push({ x: q.x, y: q.y, r: 50, rgb: q.color === '#7ee08a' ? [120, 230, 140] : [170, 140, 255], a: 0.3 });
+      } else if (!q.friendly) {
+        colored.push({ x: q.x, y: q.y, r: 18, rgb: [255, 80, 80], a: 0.35 });
+      }
+    }
+    for (const d of this.drops) {
+      lights.push({ x: d.x, y: d.y, r: 50 });
+      if (d.gear.rarity >= 1) {
+        const hex = RARITY[d.gear.rarity].color;
+        const rgb: [number, number, number] = [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+        colored.push({ x: d.x, y: d.y, r: 40, rgb, a: 0.3 });
+      }
+    }
+    if (this.phase === 'cleared' || this.phase === 'reward') {
+      lights.push({ x: EXIT.x, y: EXIT.y, r: 140 });
+      colored.push({ x: EXIT.x, y: EXIT.y, r: 90, rgb: [255, 220, 130], a: 0.3 });
+    }
+    for (const e of this.enemies) {
+      if (e.kind === 'boss' && !e.dead) colored.push({ x: e.x, y: e.y, r: 120, rgb: [255, 60, 60], a: 0.12 });
+    }
+    drawLighting(c, W, H, dark, lights, colored);
+  }
+
+  /** 장착 무기를 휘두르는 모습.  /** 장착 무기를 휘두르는 모습. 손잡이를 축으로 회전시킨다. */
   private renderWeapon(c: CanvasRenderingContext2D) {
     const p = this.p;
     const b = this.weapon.base;
@@ -1136,27 +1280,57 @@ export class Game {
     });
   }
 
+  /** HUD용 패널 바탕 */
+  private panel(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+    c.fillStyle = 'rgba(16, 11, 14, 0.82)';
+    c.fillRect(x, y, w, h);
+    c.strokeStyle = '#4a3830';
+    c.lineWidth = 2;
+    c.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    c.fillStyle = 'rgba(255, 220, 180, 0.07)';
+    c.fillRect(x + 2, y + 2, w - 4, 2);
+  }
+
+  /** 테두리와 광택이 있는 게이지 */
+  private gauge(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, k: number, from: string, to: string) {
+    c.fillStyle = '#0a0608';
+    c.fillRect(x, y, w, h);
+    const g = c.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, from);
+    g.addColorStop(1, to);
+    c.fillStyle = g;
+    c.fillRect(x + 2, y + 2, Math.max(0, (w - 4) * k), h - 4);
+    c.fillStyle = 'rgba(255,255,255,0.25)';
+    c.fillRect(x + 2, y + 2, Math.max(0, (w - 4) * k), 2);
+    c.strokeStyle = '#000';
+    c.lineWidth = 1;
+    c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  }
+
   /** 오른쪽 아래 장비 슬롯 */
   private renderGearHud(c: CanvasRenderingContext2D) {
-    const size = 36;
-    const gap = 6;
-    const x0 = W - 40 - SLOTS.length * (size + gap) + gap;
-    const y0 = H - 40 - size;
+    const size = 38;
+    const gap = 5;
+    const w = SLOTS.length * (size + gap) - gap + 12;
+    const x0 = W - 16 - w;
+    const y0 = H - 16 - size - 12;
+    this.panel(c, x0, y0, w, size + 12);
     SLOTS.forEach((slot, i) => {
-      const x = x0 + i * (size + gap);
+      const x = x0 + 6 + i * (size + gap);
+      const y = y0 + 6;
       const g = this.equip[slot];
-      c.fillStyle = 'rgba(10, 10, 16, 0.75)';
-      c.fillRect(x, y0, size, size);
-      c.strokeStyle = g ? RARITY[g.rarity].color : 'rgba(255,255,255,0.15)';
+      c.fillStyle = g ? 'rgba(40, 28, 30, 0.9)' : 'rgba(0,0,0,0.4)';
+      c.fillRect(x, y, size, size);
+      c.strokeStyle = g ? RARITY[g.rarity].color : 'rgba(255,255,255,0.12)';
       c.lineWidth = 2;
-      c.strokeRect(x + 1, y0 + 1, size - 2, size - 2);
+      c.strokeRect(x + 1, y + 1, size - 2, size - 2);
       if (g) {
-        drawIcon(c, g.base.sprite, x + size / 2, y0 + size / 2, 26);
+        drawIcon(c, g.base.sprite, x + size / 2, y + size / 2, 26);
       } else {
-        c.fillStyle = 'rgba(255,255,255,0.3)';
-        c.font = this.font(10);
+        c.fillStyle = 'rgba(255,255,255,0.28)';
+        c.font = this.font(11);
         c.textAlign = 'center';
-        c.fillText(['무기', '투구', '갑옷', '신발', '장신구'][i], x + size / 2, y0 + size / 2 + 4);
+        c.fillText(['무기', '투구', '갑옷', '신발', '장신구'][i], x + size / 2, y + size / 2 + 4);
       }
     });
   }
@@ -1164,68 +1338,172 @@ export class Game {
   private renderHud() {
     const c = this.ctx;
     const p = this.p;
-    c.textAlign = 'left';
-    c.font = 'bold 14px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
+    const theme = themeForRoom(this.room);
 
-    c.fillStyle = '#000a';
-    c.fillRect(40, 36, 200, 14);
-    c.fillStyle = '#e05555';
-    c.fillRect(40, 36, 200 * (p.hp / p.maxHp), 14);
-    c.fillStyle = '#fff';
-    c.fillText(`HP ${Math.ceil(p.hp)}/${p.maxHp}`, 46, 48);
+    // 왼쪽 위: 초상화, 체력, 스킬
+    this.panel(c, 12, 10, 272, 66);
+    c.fillStyle = '#0a0608';
+    c.fillRect(20, 18, 50, 50);
+    c.strokeStyle = '#7a5d48';
+    c.lineWidth = 2;
+    c.strokeRect(21, 19, 48, 48);
+    c.save();
+    c.beginPath();
+    c.rect(22, 20, 46, 46);
+    c.clip();
+    drawSprite(c, this.char.sprite, 45, 74, 2.4, { anchor: 'feet', frame: animFrame(this.char.sprite, this.time, false, 5) });
+    c.restore();
+
+    const hpK = Math.max(0, p.hp / p.maxHp);
+    this.gauge(c, 78, 20, 198, 18, hpK, hpK < 0.3 ? '#ff7a6a' : '#f05a4a', hpK < 0.3 ? '#a01818' : '#8c1c1c');
+    c.font = '8px "Press Start 2P", monospace';
+    c.textAlign = 'left';
+    c.fillStyle = '#fff4e6';
+    c.fillText(`HP ${Math.ceil(p.hp)}/${p.maxHp}`, 86, 33);
 
     const sk = skillById(p.skillId);
     const full = sk.cd * this.skillCdMul();
-    c.fillStyle = '#000a';
-    c.fillRect(40, 56, 200, 12);
-    c.fillStyle = p.skillCd > 0 ? '#5a6a9a' : '#7fd1ff';
-    c.fillRect(40, 56, 200 * (p.skillCd > 0 ? 1 - p.skillCd / full : 1), 12);
-    c.fillStyle = '#fff';
-    c.font = '12px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
-    c.fillText(`[Space/우클릭] ${sk.name}`, 46, 66);
+    const sx = 78;
+    const sy = 42;
+    c.fillStyle = '#0a0608';
+    c.fillRect(sx, sy, 28, 28);
+    drawIcon(c, sk.sprite, sx + 14, sy + 14, 22);
+    if (p.skillCd > 0) {
+      c.fillStyle = 'rgba(0,0,0,0.65)';
+      c.beginPath();
+      c.moveTo(sx + 14, sy + 14);
+      c.arc(sx + 14, sy + 14, 20, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (p.skillCd / full));
+      c.closePath();
+      c.save();
+      c.clip();
+      c.fillRect(sx, sy, 28, 28);
+      c.restore();
+    }
+    c.strokeStyle = p.skillCd > 0 ? '#4a3830' : '#ffd27a';
+    c.lineWidth = 2;
+    c.strokeRect(sx + 1, sy + 1, 26, 26);
+    c.font = this.font(15);
+    c.fillStyle = p.skillCd > 0 ? '#a8967f' : '#ffe9c8';
+    c.fillText(sk.name, sx + 36, sy + 13);
+    c.font = '7px "Press Start 2P", monospace';
+    c.fillStyle = '#6f6152';
+    c.fillText(p.skillCd > 0 ? `${p.skillCd.toFixed(1)}s` : 'SPACE', sx + 36, sy + 25);
 
-    c.textAlign = 'right';
-    c.font = 'bold 16px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
-    c.fillStyle = '#fff';
-    c.fillText(`ROOM ${this.room}/${FINAL_ROOM}   처치 ${this.kills}`, W - 40, 50);
-
-    c.textAlign = 'left';
-    c.font = '12px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
-    c.fillStyle = '#cfd3e6';
-    let y = H - 40;
-    for (const [id, n] of this.itemCounts) {
-      c.fillText(`${itemById(id).name}${n > 1 ? ` x${n}` : ''}`, 40, y);
-      y -= 14;
+    // 위 가운데: 층 이름과 방 진행도
+    const pw = 15 * 14 + 24;
+    const px0 = W / 2 - pw / 2;
+    this.panel(c, px0, 10, pw, 44);
+    c.textAlign = 'center';
+    c.font = this.font(15);
+    c.fillStyle = '#f0a14a';
+    c.fillText(theme.name, W / 2, 28);
+    for (let i = 1; i <= FINAL_ROOM; i++) {
+      const x = px0 + 12 + (i - 1) * 14 + (Math.floor((i - 1) / 5)) * 0;
+      const y = 36;
+      const boss = i % BOSS_EVERY === 0;
+      const done = i < this.room || (i === this.room && this.phase !== 'playing');
+      const cur = i === this.room;
+      c.fillStyle = done ? '#ffd27a' : cur ? `rgba(240, 161, 74, ${0.55 + 0.45 * Math.sin(this.time * 5)})` : '#2a2024';
+      if (boss) {
+        c.beginPath();
+        c.moveTo(x + 5, y - 1);
+        c.lineTo(x + 11, y + 5);
+        c.lineTo(x + 5, y + 11);
+        c.lineTo(x - 1, y + 5);
+        c.closePath();
+        c.fill();
+        c.strokeStyle = '#c0392b';
+        c.lineWidth = 1.5;
+        c.stroke();
+      } else {
+        c.fillRect(x, y, 10, 10);
+        c.strokeStyle = '#000';
+        c.lineWidth = 1;
+        c.strokeRect(x + 0.5, y + 0.5, 9, 9);
+      }
     }
 
-    const boss = this.enemies.find((e) => e.kind === 'boss' && !e.dead);
+    // 오른쪽 위: 방 번호와 처치 수
+    this.panel(c, W - 16 - 150, 10, 150, 44);
+    c.textAlign = 'right';
+    c.font = '10px "Press Start 2P", monospace';
+    c.fillStyle = '#ffd27a';
+    c.fillText(`ROOM ${this.room}/${FINAL_ROOM}`, W - 28, 30);
+    drawSprite(c, 'skull', W - 150, 42, 1.6);
+    c.font = this.font(15);
+    c.fillStyle = '#d8c8b0';
+    c.fillText(`처치 ${this.kills}`, W - 28, 47);
+
+    // 왼쪽 아래: 획득 아이템 아이콘
+    if (this.itemCounts.size > 0) {
+      const n = this.itemCounts.size;
+      const iw = n * 34 + 8;
+      this.panel(c, 16, H - 16 - 46, iw, 46);
+      let x = 24;
+      for (const [id, cnt] of this.itemCounts) {
+        drawIcon(c, itemById(id).sprite, x + 15, H - 16 - 23, 24);
+        if (cnt > 1) {
+          c.font = '8px "Press Start 2P", monospace';
+          c.textAlign = 'right';
+          c.lineWidth = 3;
+          c.strokeStyle = '#000';
+          c.strokeText(`${cnt}`, x + 32, H - 16 - 8);
+          c.fillStyle = '#ffd27a';
+          c.fillText(`${cnt}`, x + 32, H - 16 - 8);
+        }
+        x += 34;
+      }
+    }
+
+    // 보스 체력
+    const boss = this.enemies.find((e) => e.kind === 'boss' && !e.dead && e.spawnT <= 0);
     if (boss) {
-      c.fillStyle = '#000a';
-      c.fillRect(W / 2 - 200, 40, 400, 12);
-      c.fillStyle = '#c0392b';
-      c.fillRect(W / 2 - 200, 40, 400 * Math.max(0, boss.hp / boss.maxHp), 12);
+      const bw = 440;
+      const bx = W / 2 - bw / 2;
+      const by = TOP + 14;
+      this.panel(c, bx - 8, by - 6, bw + 16, 40);
       c.textAlign = 'center';
-      c.fillStyle = '#fff';
-      c.fillText(BOSS_NAME[boss.tier], W / 2, 36);
+      c.font = this.font(16);
+      c.fillStyle = '#ff9a7a';
+      c.fillText(BOSS_NAME[boss.tier], W / 2, by + 10);
+      this.gauge(c, bx, by + 16, bw, 12, Math.max(0, boss.hp / boss.maxHp), '#e04a3a', '#701010');
     }
 
     this.renderGearHud(c);
     if (this.phase === 'cleared') {
       c.textAlign = 'center';
-      c.font = this.font(14, true);
+      c.font = this.font(17);
+      c.lineWidth = 4;
+      c.strokeStyle = 'rgba(0,0,0,0.8)';
+      const msg = this.room >= FINAL_ROOM ? '사다리에 올라 던전을 탈출하세요' : '장비를 정리하고 위쪽 사다리로 이동하세요';
+      c.strokeText(msg, W / 2, EXIT.y + 50);
       c.fillStyle = '#ffe9a0';
-      c.fillText(this.room >= FINAL_ROOM ? '사다리에 올라 던전을 탈출하세요' : '장비를 정리하고 위쪽 사다리로 이동하세요', W / 2, EXIT.y + 46);
+      c.fillText(msg, W / 2, EXIT.y + 50);
     }
     this.renderTooltip(c);
 
     if (this.bannerT > 0) {
-      c.globalAlpha = Math.min(1, this.bannerT);
+      // 방 입장 배너: 가운데 띠 + 픽셀 글자
+      const a = Math.min(1, this.bannerT);
+      const isBoss = this.room % BOSS_EVERY === 0;
+      c.globalAlpha = a;
+      const g = c.createLinearGradient(0, 0, W, 0);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(0.5, isBoss ? 'rgba(90, 10, 10, 0.75)' : 'rgba(10, 6, 8, 0.7)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 150, W, 86);
       c.textAlign = 'center';
-      c.fillStyle = '#fff';
-      c.font = 'bold 36px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
-      c.font = '28px "Press Start 2P", monospace';
-      c.fillStyle = this.room % BOSS_EVERY === 0 ? '#ff7a5a' : '#ffd27a';
-      c.fillText(this.room % BOSS_EVERY === 0 ? `BOSS ROOM ${this.room}` : `ROOM ${this.room}`, W / 2, 130);
+      c.font = '26px "Press Start 2P", monospace';
+      c.lineWidth = 6;
+      c.strokeStyle = '#000';
+      const title = isBoss ? `BOSS ROOM ${this.room}` : `ROOM ${this.room}`;
+      c.strokeText(title, W / 2, 196);
+      c.fillStyle = isBoss ? '#ff7a5a' : '#ffd27a';
+      c.fillText(title, W / 2, 196);
+      c.font = this.font(18);
+      c.fillStyle = '#d8c8b0';
+      c.fillText(isBoss ? BOSS_NAME[Math.floor(this.room / BOSS_EVERY)] + '이(가) 깨어났다' : theme.name, W / 2, 224);
       c.globalAlpha = 1;
     }
   }
