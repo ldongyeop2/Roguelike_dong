@@ -57,8 +57,12 @@ export class UI {
     el.querySelectorAll<HTMLElement>('[data-char]').forEach((b) =>
       b.addEventListener('click', () => this.showMenu(save, h, 'play', b.dataset.char)));
     el.querySelector('#start')?.addEventListener('click', () => h.onStart(sel));
-    el.querySelector('#reset')?.addEventListener('click', () => {
-      if (confirm('저장된 해금 정보와 기록이 모두 삭제됩니다. 계속할까요?')) h.onReset();
+    // 브라우저 확인 대화상자를 쓸 수 없는 환경이 있어 두 번 눌러 확인하는 방식으로 처리한다.
+    const reset = el.querySelector<HTMLButtonElement>('#reset');
+    reset?.addEventListener('click', () => {
+      if (reset.dataset.armed) return h.onReset();
+      reset.dataset.armed = '1';
+      reset.textContent = '한 번 더 누르면 모든 해금과 기록이 삭제됩니다';
     });
   }
 
