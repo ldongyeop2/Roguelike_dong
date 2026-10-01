@@ -1,0 +1,73 @@
+import './style.css';
+import { Game, type Card } from './game';
+import { Input } from './input';
+import { applyRunResult, loadSave, persist, resetSave, type RunResult } from './meta';
+import { UI } from './ui';
+
+const canvas = document.getElementById('game') as HTMLCanvasElement;
+const ui = new UI(document.getElementById('overlay')!);
+const input = new Input(canvas);
+
+let save = loadSave();
+let game: Game | null = null;
+let last = performance.now();
+
+function menu() {
+  game = null;
+  ui.showMenu(save, {
+    onStart: startRun,
+    onReset: () => {
+      save = resetSave();
+      menu();
+    },
+  });
+}
+
+function startRun(charId: string) {
+  save.lastChar = charId;
+  persist(save);
+  ui.hide();
+  game = new Game(canvas, input, charId, save.unlocked, {
+    onReward: (cards: Card[], room: number) => ui.showReward(cards, room, (c) => {
+      ui.hide();
+      game?.pickReward(c);
+    }),
+    onEnd: (r: RunResult) => {
+      const newly = applyRunResult(save, r);
+      ui.showEnd(r, newly, save, menu);
+    },
+    onPause: (paused) => {
+      if (!paused) return ui.hide();
+      ui.showPause(
+        () => {
+          if (game) game.paused = false;
+          ui.hide();
+        },
+        () => {
+          if (!game) return;
+          const r = game.abandon();
+          const newly = applyRunResult(save, r);
+          ui.showEnd(r, newly, save, menu);
+          game = null;
+        },
+      );
+    },
+  });
+}
+
+function frame(now: number) {
+  const dt = (now - last) / 1000;
+  last = now;
+  if (game) {
+    game.update(dt);
+    game.render();
+  } else {
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#0b0c10';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  requestAnimationFrame(frame);
+}
+
+menu();
+requestAnimationFrame(frame);

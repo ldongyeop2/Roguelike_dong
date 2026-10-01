@@ -1,0 +1,42 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #0b0c10; color: #e8eaf6;
+  font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", sans-serif;
+  display: flex; justify-content: center; align-items: center; min-height: 100vh;
+}
+#app { position: relative; width: min(960px, 100vw); aspect-ratio: 960 / 640; }
+canvas { width: 100%; height: 100%; display: block; background: #000; cursor: crosshair; }
+#overlay { position: absolute; inset: 0; pointer-events: none; }
+#overlay > * { pointer-events: auto; }
+.screen {
+  position: absolute; inset: 0; background: rgba(8, 9, 14, 0.94); padding: 20px 28px;
+  display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+}
+.screen.dim { background: rgba(8, 9, 14, 0.82); justify-content: center; align-items: center; text-align: center; }
+h1 { margin: 0; font-size: 28px; letter-spacing: 1px; }
+h2 { margin: 6px 0 2px; font-size: 16px; color: #9fa8da; }
+.sub { color: #8d93b0; font-size: 13px; }
+.tabs { display: flex; gap: 8px; }
+button {
+  background: #2a2f4a; color: #e8eaf6; border: 1px solid #3d4470; border-radius: 6px;
+  padding: 8px 14px; font: inherit; cursor: pointer;
+}
+button:hover { background: #363c60; }
+button.primary { background: #3f51b5; border-color: #5c6bc0; font-weight: bold; }
+button.active { background: #3d4470; }
+button.danger { color: #ef9a9a; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.card {
+  background: #1a1d2e; border: 1px solid #2c3150; border-radius: 8px; padding: 10px; font-size: 13px;
+  text-align: left; display: flex; flex-direction: column; gap: 4px;
+}
+.card .name { font-weight: bold; font-size: 14px; }
+.card.sel { border-color: #7986cb; box-shadow: 0 0 0 1px #7986cb; }
+.card.locked { opacity: 0.55; }
+.bar { height: 6px; background: #0007; border-radius: 3px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: #7986cb; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.rewards { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.rewards .card { width: 180px; cursor: pointer; padding: 14px; }
+.rewards .card:hover { border-color: #9fa8da; background: #232844; }
+.new { color: #ffd54f; font-weight: bold; }
