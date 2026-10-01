@@ -1040,7 +1040,7 @@ export class Game {
         c.fill();
       } else {
         c.fillStyle = f.color;
-        c.font = 'bold 14px sans-serif';
+        c.font = '10px "Press Start 2P", monospace';
         c.textAlign = 'center';
         c.fillText(f.text ?? '', f.x, f.y - k * 16);
       }
@@ -1093,7 +1093,7 @@ export class Game {
   }
 
   private font(size: number, bold = false) {
-    return `${bold ? 'bold ' : ''}${size}px "Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR",sans-serif`;
+    return `${bold ? 'bold ' : ''}${size}px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif`;
   }
 
   /** 가까운 드랍 장비의 정보와 현재 장착 장비 비교 */
@@ -1165,7 +1165,7 @@ export class Game {
     const c = this.ctx;
     const p = this.p;
     c.textAlign = 'left';
-    c.font = 'bold 14px "Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR",sans-serif';
+    c.font = 'bold 14px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
 
     c.fillStyle = '#000a';
     c.fillRect(40, 36, 200, 14);
@@ -1181,16 +1181,16 @@ export class Game {
     c.fillStyle = p.skillCd > 0 ? '#5a6a9a' : '#7fd1ff';
     c.fillRect(40, 56, 200 * (p.skillCd > 0 ? 1 - p.skillCd / full : 1), 12);
     c.fillStyle = '#fff';
-    c.font = '12px "Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR",sans-serif';
+    c.font = '12px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
     c.fillText(`[Space/우클릭] ${sk.name}`, 46, 66);
 
     c.textAlign = 'right';
-    c.font = 'bold 16px "Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR",sans-serif';
+    c.font = 'bold 16px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
     c.fillStyle = '#fff';
     c.fillText(`ROOM ${this.room}/${FINAL_ROOM}   처치 ${this.kills}`, W - 40, 50);
 
     c.textAlign = 'left';
-    c.font = '12px "Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR",sans-serif';
+    c.font = '12px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
     c.fillStyle = '#cfd3e6';
     let y = H - 40;
     for (const [id, n] of this.itemCounts) {
@@ -1222,8 +1222,10 @@ export class Game {
       c.globalAlpha = Math.min(1, this.bannerT);
       c.textAlign = 'center';
       c.fillStyle = '#fff';
-      c.font = 'bold 36px "Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR",sans-serif';
-      c.fillText(this.room % BOSS_EVERY === 0 ? `BOSS  -  ROOM ${this.room}` : `ROOM ${this.room}`, W / 2, 120);
+      c.font = 'bold 36px "Do Hyeon","Noto Sans KR","Malgun Gothic",sans-serif';
+      c.font = '28px "Press Start 2P", monospace';
+      c.fillStyle = this.room % BOSS_EVERY === 0 ? '#ff7a5a' : '#ffd27a';
+      c.fillText(this.room % BOSS_EVERY === 0 ? `BOSS ROOM ${this.room}` : `ROOM ${this.room}`, W / 2, 130);
       c.globalAlpha = 1;
     }
   }

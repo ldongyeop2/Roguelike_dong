@@ -1,6 +1,7 @@
 import './style.css';
 import { Game, type Card } from './game';
 import { Input } from './input';
+import { MenuScene } from './menuScene';
 import { applyRunResult, loadSave, persist, resetSave, type RunResult } from './meta';
 import { UI } from './ui';
 
@@ -11,11 +12,13 @@ const input = new Input(canvas);
 let save = loadSave();
 let game: Game | null = null;
 let last = performance.now();
+const scene = new MenuScene(canvas.getContext('2d')!);
 
 function menu() {
   game = null;
   ui.showMenu(save, {
     onStart: startRun,
+    onSelect: (id) => { scene.charId = id; },
     onReset: () => {
       save = resetSave();
       menu();
@@ -67,9 +70,8 @@ function frame(now: number) {
     game.update(dt);
     game.render();
   } else {
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = '#0b0c10';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    scene.update(Math.min(dt, 1 / 30));
+    scene.render();
   }
   requestAnimationFrame(frame);
 }

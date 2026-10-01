@@ -76,6 +76,16 @@ export const S = {
   floor_3: tile(48, 64),
   floor_4: tile(16, 80),
   ladder: tile(48, 96),
+  // 장식(메뉴 배경)
+  wall_top: tile(16, 0),
+  fountain_top: tile(64, 0),
+  fountain_mid: { x: 64, y: 16, w: 16, h: 16, n: 3 },
+  fountain_basin: { x: 64, y: 32, w: 16, h: 16, n: 3 },
+  banner_red: tile(16, 32),
+  banner_blue: tile(32, 32),
+  banner_green: tile(16, 48),
+  banner_yellow: tile(32, 48),
+  pillar: tile(80, 80, 16, 40),
 } satisfies Record<string, Spr>;
 
 export type SpriteKey = keyof typeof S;

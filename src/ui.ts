@@ -1,11 +1,11 @@
 import {
-  ALL_DEFS, CHARACTERS, ITEMS, SKILLS, unlockText, type AnyDef,
+  ALL_DEFS, CHARACTERS, ITEMS, SKILLS, charById, skillById, unlockText, type AnyDef,
 } from './content';
 import { isUnlocked, progressOf, type RunResult, type Save } from './meta';
 import type { Card } from './game';
 import { paintGenIcons } from './icons';
 import { iconHtml, type IconRef } from './sprites';
-import { ARMORS, RARITY, SLOT_LABEL, WEAPONS, gearLines, gearTitle, type Gear, type Slot } from './gear';
+import { ARMORS, RARITY, SLOT_LABEL, WEAPONS, WKIND_LABEL, gearLines, gearTitle, weaponById, type Gear, type Slot } from './gear';
 
 const icon = (key: IconRef, px = 32) => `<span class="icon">${iconHtml(key, px)}</span>`;
 
@@ -14,6 +14,7 @@ const KIND_LABEL = { char: '캐릭터', item: '아이템', skill: '스킬', gear
 export interface MenuHandlers {
   onStart(charId: string): void;
   onReset(): void;
+  onSelect(charId: string): void;
 }
 
 export class UI {
@@ -47,18 +48,33 @@ export class UI {
 
   showMenu(save: Save, h: MenuHandlers, tab: 'play' | 'codex' = 'play', picked?: string) {
     const sel = picked && isUnlocked(save, picked) ? picked : isUnlocked(save, save.lastChar) ? save.lastChar : 'knight';
-    const all = ALL_DEFS;
-    const got = all.filter((d) => isUnlocked(save, d.id)).length;
+    h.onSelect(sel);
+    const got = ALL_DEFS.filter((d) => isUnlocked(save, d.id)).length;
     const s = save.stats;
-    const el = this.mount(`
-      <h1>Roguelike Dong</h1>
-      <div class="sub">죽을수록 강해지는 것이 아니라, 선택지가 늘어납니다. 해금 ${got}/${all.length} | 도전 ${s.deaths + s.wins}회 | 최고 ROOM ${s.bestRoom} | 클리어 ${s.wins}회</div>
-      <div class="tabs">
-        <button data-tab="play" class="${tab === 'play' ? 'active' : ''}">출정</button>
-        <button data-tab="codex" class="${tab === 'codex' ? 'active' : ''}">해금 도감</button>
-      </div>
-      ${tab === 'play' ? this.playTab(save, sel) : this.codexTab(save)}
-    `);
+    const side = `
+      <aside class="side">
+        <header>
+          <div class="logo">ROGUELIKE <span>DONG</span></div>
+          <p class="tag">죽을수록 강해지는 대신, 선택지가 늘어나는 던전</p>
+        </header>
+        <div class="stats">
+          <div class="stat"><b>${s.deaths + s.wins}</b><small>도전</small></div>
+          <div class="stat"><b>${s.bestRoom}</b><small>최고 방</small></div>
+          <div class="stat"><b>${s.wins}</b><small>클리어</small></div>
+          <div class="stat"><b>${got}/${ALL_DEFS.length}</b><small>해금</small></div>
+        </div>
+        <div class="tabs">
+          <button data-tab="play" class="${tab === 'play' ? 'active' : ''}">출정</button>
+          <button data-tab="codex" class="${tab === 'codex' ? 'active' : ''}">해금 도감</button>
+        </div>
+        <h3>캐릭터</h3>
+        <div class="roster">${CHARACTERS.map((c) => this.heroRow(save, c.id, c.id === sel)).join('')}</div>
+        <div class="foot">
+          <div class="keys"><kbd>WASD</kbd> 이동 <kbd>LMB</kbd> 공격 <kbd>SPACE</kbd> 스킬<br><kbd>E</kbd> 장비 <kbd>ESC</kbd> 일시정지</div>
+          <button id="reset" class="small danger">기록 초기화</button>
+        </div>
+      </aside>`;
+    const el = this.mount(side + (tab === 'play' ? this.heroCard(sel) : this.codexTab(save)), 'screen menu');
     el.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) =>
       b.addEventListener('click', () => this.showMenu(save, h, b.dataset.tab as 'play' | 'codex', sel)));
     el.querySelectorAll<HTMLElement>('[data-char]').forEach((b) =>
@@ -69,24 +85,51 @@ export class UI {
     reset?.addEventListener('click', () => {
       if (reset.dataset.armed) return h.onReset();
       reset.dataset.armed = '1';
-      reset.textContent = '한 번 더 누르면 모든 해금과 기록이 삭제됩니다';
+      reset.textContent = '한 번 더 누르면 삭제';
     });
   }
 
-  private playTab(save: Save, sel: string): string {
-    const cards = CHARACTERS.map((c) => this.defCard(save, c, `data-char="${c.id}"`, c.id === sel)).join('');
+  private heroRow(save: Save, id: string, sel: boolean): string {
+    const c = charById(id);
+    if (!isUnlocked(save, id)) {
+      const pr = progressOf(save, c.unlock!);
+      return `<div class="hero-row locked">${icon(c.sprite)}<div><div class="nm">???</div>
+        <div class="ds">${unlockText(c.unlock!)} (${pr.cur}/${pr.target})</div>
+        <div class="bar"><i style="width:${(pr.cur / pr.target) * 100}%"></i></div></div></div>`;
+    }
+    const w = weaponById(c.startWeapon);
+    return `<button class="hero-row ${sel ? 'sel' : ''}" data-char="${id}">${icon(c.sprite)}
+      <div><div class="nm">${c.name}</div><div class="ds">${w.name} · ${skillById(c.skill).name}</div></div></button>`;
+  }
+
+  private heroCard(id: string): string {
+    const c = charById(id);
+    const w = weaponById(c.startWeapon);
+    const sk = skillById(c.skill);
     return `
-      <h2>캐릭터 선택</h2>
-      <div class="grid">${cards}</div>
-      <div class="sub">WASD 이동 / 마우스 조준, 좌클릭 공격 / Space 또는 우클릭 스킬 / E 장비 줍기 / Esc 일시정지(장비 확인)</div>
-      <div class="row"><button id="start" class="primary">런 시작</button><button id="reset" class="danger">저장 초기화</button></div>`;
+      <section class="hero-card">
+        <div class="title"><b>${c.name}</b><span>READY</span></div>
+        <p>${c.desc}</p>
+        <div class="chips">
+          <span class="chip">체력 <b>${c.hp}</b></span>
+          <span class="chip">이동 <b>${c.speed}</b></span>
+          <span class="chip">무기 <b>${w.name}</b> (${WKIND_LABEL[w.wkind]})</span>
+          <span class="chip">스킬 <b>${sk.name}</b></span>
+        </div>
+        <button id="start" class="primary">던전으로 출정</button>
+      </section>`;
   }
 
   private codexTab(save: Save): string {
-    const sec = (title: string, defs: AnyDef[]) =>
-      `<h2>${title}</h2><div class="grid">${defs.map((d) => this.defCard(save, d)).join('')}</div>`;
-    return sec('캐릭터', CHARACTERS) + sec('스킬', SKILLS) + sec('아이템', ITEMS) +
-      sec('장비: 무기', WEAPONS) + sec('장비: 방어구와 장신구', ARMORS);
+    const sec = (title: string, defs: AnyDef[]) => {
+      const n = defs.filter((d) => isUnlocked(save, d.id)).length;
+      return `<h2>${title} <span class="sub">${n}/${defs.length}</span></h2><div class="grid">${defs.map((d) => this.defCard(save, d)).join('')}</div>`;
+    };
+    return `<section class="codex">
+      <div class="top"><h1>해금 도감</h1><button data-tab="play">닫기</button></div>
+      <p class="sub">죽음과 기록이 쌓일수록 새 캐릭터, 스킬, 아이템, 장비가 던전에 등장합니다.</p>
+      ${sec('캐릭터', CHARACTERS) + sec('스킬', SKILLS) + sec('아이템', ITEMS) + sec('장비: 무기', WEAPONS) + sec('장비: 방어구와 장신구', ARMORS)}
+    </section>`;
   }
 
   showReward(cards: Card[], room: number, onPick: (c: Card) => void) {
@@ -131,7 +174,8 @@ export class UI {
       `<h1>${r.won ? '던전 클리어!' : '쓰러졌습니다'}</h1>
        <div class="sub">ROOM ${r.room} 도달 | 처치 ${r.kills} | 보스 처치 ${r.bossKills} | 획득 ${r.itemsCollected}</div>
        ${list}${hint}
-       <div class="row"><button id="menu" class="primary">메뉴로</button></div>`);
+       <div class="row"><button id="menu" class="primary">다시 출정 준비</button></div>`,
+      `screen result ${r.won ? 'won' : 'dead'}`);
     el.querySelector('#menu')!.addEventListener('click', onMenu);
   }
 }
