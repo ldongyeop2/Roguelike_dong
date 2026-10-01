@@ -2,9 +2,13 @@ import {
   ITEMS, SKILLS, baseMods, charById, itemById, skillById,
   type CharDef, type Mods,
 } from './content';
+import {
+  GEAR_BASES, RARITY, SLOTS, gearLines, gearTitle, makeGear, rollRarity, weaponById,
+  type Gear, type GearStats, type Slot, type StatKey, type WeaponBase, type WeaponKind,
+} from './gear';
 import type { Input } from './input';
 import type { RunResult } from './meta';
-import { animFrame, background, drawSprite } from './sprites';
+import { animFrame, background, drawIcon, drawSprite, type IconRef } from './sprites';
 import { S, type SpriteKey } from './spritesheet';
 import { angDiff, clamp, dist, rand, shuffle } from './util';
 
@@ -21,6 +25,23 @@ const ENEMY_SPRITE: Record<Exclude<EnemyKind, 'boss'>, SpriteKey> = {
 };
 const BOSS_SPRITE: SpriteKey[] = ['big_zombie', 'big_zombie', 'ogre', 'big_demon'];
 const BOSS_NAME = ['', '파수꾼', '군주', '심연의 왕'];
+
+/** 처치 시 장비 드랍 확률 */
+const DROP_CHANCE: Record<EnemyKind, number> = {
+  grunt: 0.1, archer: 0.1, swarm: 0.04, charger: 0.14, brute: 0.3, boss: 1,
+};
+/** 무기 종류별 휘두르기 애니메이션 길이(초) */
+const SWING_TIME: Record<WeaponKind, number> = {
+  slash: 0.16, thrust: 0.14, smash: 0.24, bow: 0.18, staff: 0.2,
+};
+const EXIT = { x: W / 2, y: WALL + 34 }; // 방 클리어 후 나타나는 출구(사다리)
+
+interface Drop { x: number; y: number; gear: Gear; t: number }
+
+const ZERO_STATS = (): Required<GearStats> => ({
+  dmgPct: 0, rate: 0, speed: 0, maxHp: 0, armor: 0, crit: 0, lifesteal: 0, regen: 0, skillCd: 0,
+});
+const easeOut = (t: number) => 1 - (1 - t) ** 3;
 
 interface EnemyStat { hp: number; r: number; speed: number; dmg: number; color: string; cost: number; minRoom: number }
 
@@ -79,7 +100,7 @@ export interface Card {
   id: string;
   name: string;
   desc: string;
-  sprite: SpriteKey;
+  sprite: IconRef;
 }
 
 export interface GameEvents {
@@ -101,7 +122,14 @@ export class Game {
     aim: 0, atkCd: 0, skillCd: 0, skillId: '',
     invuln: 0, dashT: 0, dashX: 0, dashY: 0,
     shieldT: 0, rageT: 0, slowT: 0, orbitA: 0, hpAcc: 0, moving: false,
+    swingT: 0, swingDur: 1, swingAim: 0, swingDir: 1,
   };
+
+  private equip: Record<Slot, Gear | null> = { weapon: null, helmet: null, armor: null, boots: null, accessory: null };
+  private gs = ZERO_STATS(); // 장착 장비 능력치 합계
+  private drops: Drop[] = [];
+  private near: Drop | null = null; // 플레이어 가까이 있는 드랍
+  private pickedUids = new Set<number>();
 
   private enemies: Enemy[] = [];
   private projs: Proj[] = [];
@@ -112,7 +140,6 @@ export class Game {
 
   room = 0;
   private phase: Phase = 'playing';
-  private clearT = 0;
   private bannerT = 0;
   paused = false;
   private time = 0; // 애니메이션용 누적 시간
@@ -133,9 +160,9 @@ export class Game {
     this.ctx = canvas.getContext('2d')!;
     this.char = charById(charId);
     this.unlocked = new Set(unlockedIds);
-    this.p.maxHp = this.char.hp;
-    this.p.hp = this.char.hp;
     this.p.skillId = this.char.skill;
+    this.equip.weapon = makeGear(weaponById(this.char.startWeapon), 0, 1);
+    this.recalc();
     this.startRoom(1);
   }
 
@@ -147,6 +174,8 @@ export class Game {
     this.enemies = [];
     this.projs = [];
     this.turrets = [];
+    this.drops = [];
+    this.near = null;
     this.p.x = W / 2;
     this.p.y = H / 2;
     this.bannerT = 1.6;
@@ -215,11 +244,12 @@ export class Game {
 
   private roomCleared() {
     this.phase = 'cleared';
-    this.clearT = 1.0;
     this.roomsCleared++;
     this.heal(this.p.maxHp * 0.08);
     this.projs = this.projs.filter((q) => q.friendly);
-    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 40, t: 0, life: 1.2, text: 'CLEAR', color: '#fff' });
+    // 방마다 장비 하나는 보장한다.
+    this.spawnDrop(W / 2, H / 2 + 40, this.room % BOSS_EVERY === 0 ? 2 : 0);
+    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 40, t: 0, life: 1.6, text: 'CLEAR', color: '#fff' });
   }
 
   abandon(): RunResult {
@@ -271,13 +301,8 @@ export class Game {
       this.p.skillCd = 0;
       this.itemsCollected++;
     } else {
-      const def = itemById(card.id);
-      const before = this.m.maxHp;
-      def.apply(this.m);
-      const diff = this.m.maxHp - before;
-      this.p.maxHp = this.char.hp + this.m.maxHp;
-      if (diff > 0) this.p.hp += diff;
-      this.p.hp = Math.min(this.p.hp, this.p.maxHp);
+      itemById(card.id).apply(this.m);
+      this.recalc();
       this.itemCounts.set(card.id, (this.itemCounts.get(card.id) ?? 0) + 1);
       this.itemsCollected++;
     }
@@ -302,9 +327,11 @@ export class Game {
     if (this.phase === 'reward') return;
 
     if (this.phase === 'cleared') {
-      this.clearT -= dt;
       this.updatePlayer(dt);
-      if (this.clearT <= 0) {
+      this.updateProjs(dt, dt);
+      this.updateDrops(dt);
+      // 출구(사다리)에 올라서면 다음 단계로
+      if (dist(this.p.x, this.p.y, EXIT.x, EXIT.y) < 24) {
         if (this.room >= FINAL_ROOM) {
           this.finish(true);
         } else {
@@ -322,6 +349,7 @@ export class Game {
     this.updateEnemies(dt, dt * slow);
     this.updateProjs(dt, dt * slow);
     this.updateOrbit(dt);
+    this.updateDrops(dt);
     this.enemies = this.enemies.filter((e) => !e.dead);
 
     if (this.phase === 'playing' && this.enemies.length === 0) {
@@ -334,8 +362,88 @@ export class Game {
     this.p.hp = Math.min(this.p.maxHp, this.p.hp + v);
   }
 
+  /** 장비 능력치 합계를 다시 계산하고 최대 체력을 반영한다. 최대 체력이 늘면 그만큼 회복. */
+  private recalc() {
+    const z = ZERO_STATS();
+    for (const slot of SLOTS) {
+      const g = this.equip[slot];
+      if (!g) continue;
+      for (const [k, v] of Object.entries(g.stats) as [StatKey, number][]) z[k] += v;
+    }
+    this.gs = z;
+    const p = this.p;
+    const prev = p.maxHp;
+    p.maxHp = Math.max(10, Math.round(this.char.hp + this.m.maxHp + z.maxHp));
+    if (p.maxHp > prev) p.hp += p.maxHp - prev;
+    p.hp = Math.min(p.hp, p.maxHp);
+  }
+
+  private get weapon(): Gear & { base: WeaponBase } {
+    return this.equip.weapon as Gear & { base: WeaponBase };
+  }
+
+  private skillCdMul(): number {
+    return this.m.skillCd * Math.max(0.4, 1 - this.gs.skillCd);
+  }
+
+  /** 일시정지 화면용 장비 목록 */
+  equipment(): { slot: Slot; gear: Gear | null }[] {
+    return SLOTS.map((slot) => ({ slot, gear: this.equip[slot] }));
+  }
+
+  // ---------- 장비 드랍 ----------
+
+  private spawnDrop(x: number, y: number, minRarity: number) {
+    const slot = SLOTS[Math.floor(Math.random() * SLOTS.length)];
+    const pool = GEAR_BASES.filter((b) => b.slot === slot && this.unlocked.has(b.id));
+    if (pool.length === 0) return;
+    const base = pool[Math.floor(Math.random() * pool.length)];
+    const gear = makeGear(base, rollRarity(this.room, minRarity), this.room);
+    this.drops.push({
+      x: clamp(x + rand(-12, 12), WALL + 20, W - WALL - 20),
+      y: clamp(y + rand(-12, 12), WALL + 20, H - WALL - 20),
+      gear, t: rand(0, 3),
+    });
+  }
+
+  private updateDrops(dt: number) {
+    const p = this.p;
+    let best: Drop | null = null;
+    let bd = 34;
+    for (const d of this.drops) {
+      d.t += dt;
+      const dd = dist(d.x, d.y, p.x, p.y);
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    // 빈 슬롯이면 자동으로 장착
+    if (best && !this.equip[best.gear.base.slot]) {
+      this.equipDrop(best);
+      best = null;
+    }
+    this.near = best;
+    if (this.input.takeInteract() && this.near) this.equipDrop(this.near);
+  }
+
+  private equipDrop(d: Drop) {
+    const slot = d.gear.base.slot;
+    const old = this.equip[slot];
+    this.equip[slot] = d.gear;
+    this.drops = this.drops.filter((o) => o !== d);
+    if (old) this.drops.push({ x: d.x, y: d.y, gear: old, t: 0 });
+    if (!this.pickedUids.has(d.gear.uid)) {
+      this.pickedUids.add(d.gear.uid);
+      this.itemsCollected++;
+    }
+    this.recalc();
+    this.near = null;
+    this.fx.push({
+      kind: 'text', x: this.p.x, y: this.p.y - 40, t: 0, life: 1.0,
+      text: `장착: ${d.gear.base.name}`, color: RARITY[d.gear.rarity].color,
+    });
+  }
+
   private dmgMul(): number {
-    let v = this.m.dmg;
+    let v = this.m.dmg * (1 + this.gs.dmgPct);
     if (this.p.rageT > 0) v *= 1.5;
     if (this.char.id === 'berserker') v *= 1 + (1 - this.p.hp / this.p.maxHp);
     return v;
@@ -350,7 +458,9 @@ export class Game {
     p.slowT = Math.max(0, p.slowT - dt);
     p.skillCd = Math.max(0, p.skillCd - dt);
     p.atkCd = Math.max(0, p.atkCd - dt);
-    if (this.m.regen > 0) this.heal(this.m.regen * dt);
+    p.swingT = Math.max(0, p.swingT - dt);
+    const regen = this.m.regen + this.gs.regen;
+    if (regen > 0) this.heal(regen * dt);
 
     if (p.dashT > 0) {
       p.dashT -= dt;
@@ -359,7 +469,7 @@ export class Game {
     } else {
       const a = this.input.axis();
       p.moving = a.x !== 0 || a.y !== 0;
-      const sp = this.char.speed * this.m.speed;
+      const sp = this.char.speed * this.m.speed * Math.max(0.5, 1 + this.gs.speed);
       p.x += a.x * sp * dt;
       p.y += a.y * sp * dt;
     }
@@ -368,17 +478,17 @@ export class Game {
 
     if (this.input.takeSkill() && p.skillCd <= 0) this.useSkill();
 
-    const rate = this.m.rate * (p.rageT > 0 ? 1.5 : 1);
-    if (this.input.down && p.atkCd <= 0 && this.phase === 'playing') {
-      p.atkCd = this.char.cd / rate;
-      this.fireWeapon();
+    const rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1);
+    if (this.input.down && p.atkCd <= 0) {
+      p.atkCd = this.weapon.base.cd / rate;
+      this.attack(p.atkCd);
     }
   }
 
   private useSkill() {
     const p = this.p;
     const def = skillById(p.skillId);
-    p.skillCd = def.cd * this.m.skillCd;
+    p.skillCd = def.cd * this.skillCdMul();
     switch (def.id) {
       case 'dash': {
         const a = this.input.axis();
@@ -420,56 +530,58 @@ export class Game {
     }
   }
 
-  private fireWeapon() {
+  /** 장착한 무기로 공격한다. 무기 종류마다 판정과 휘두르는 모션이 다르다. */
+  private attack(interval: number) {
     const p = this.p;
-    const c = this.char;
+    const w = this.weapon;
+    const b = w.base;
     const m = this.m;
-    const dmg = c.dmg * this.dmgMul();
-    const ax = Math.cos(p.aim);
-    const ay = Math.sin(p.aim);
+    const dmg = w.dmg * this.dmgMul();
+    p.swingDur = Math.min(SWING_TIME[b.wkind], interval * 0.9);
+    p.swingT = p.swingDur;
+    p.swingAim = p.aim;
+    p.swingDir = -p.swingDir; // 베기는 좌우를 번갈아 휘두른다
 
-    if (c.weapon === 'melee') {
-      const range = 82 + m.extra * 16;
-      const arc = 1.9;
-      for (const e of this.enemies) {
-        if (e.spawnT > 0 || e.dead) continue;
-        const d = dist(e.x, e.y, p.x, p.y);
-        if (d > range + e.r) continue;
-        if (angDiff(Math.atan2(e.y - p.y, e.x - p.x), p.aim) > arc / 2) continue;
-        this.hurtEnemy(e, dmg, true);
-        e.kx += ax * 260;
-        e.ky += ay * 260;
+    if (b.wkind === 'bow' || b.wkind === 'staff') {
+      const bow = b.wkind === 'bow';
+      const count = 1 + Math.floor(m.extra);
+      const step = bow ? 0.12 : 0.18;
+      const speed = bow ? 560 : 380;
+      for (let i = 0; i < count; i++) {
+        const a = p.aim + (i - (count - 1) / 2) * step;
+        this.projs.push({
+          x: p.x + Math.cos(a) * 18, y: p.y - 6 + Math.sin(a) * 18,
+          vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+          r: bow ? 4 : 9, dmg, life: bow ? 1.2 : 1.6, friendly: true,
+          pierce: m.pierce + (bow ? 0 : 2), bounce: m.bounce, hit: new Set(),
+          color: b.id === 'staff_green' ? '#7ee08a' : '#b49cff',
+          sprite: bow ? 'w_arrow' : undefined,
+        });
       }
-      this.projs = this.projs.filter((q) => {
-        if (q.friendly) return true;
-        const d = dist(q.x, q.y, p.x, p.y);
-        return !(d < range && angDiff(Math.atan2(q.y - p.y, q.x - p.x), p.aim) < arc / 2);
-      });
-      this.fx.push({ kind: 'arc', x: p.x, y: p.y, t: 0, life: 0.14, r: range, a: p.aim, arc, color: c.color });
       return;
     }
 
-    const extra = Math.floor(m.extra);
-    let count = 1 + extra;
-    let step = 0.12;
-    let speed = 520;
-    let r = 4;
-    let life = 1.2;
-    let pierce = m.pierce;
-    let color = c.color;
-    if (c.weapon === 'pierce') {
-      speed = 380; r = 9; life = 1.6; pierce += 2; step = 0.18;
-    } else if (c.weapon === 'spread') {
-      count = 3 + extra; speed = 480; life = 0.4; step = 0.17; color = '#f0c0e0';
+    const range = b.range + m.extra * 16;
+    const ax = Math.cos(p.aim);
+    const ay = Math.sin(p.aim);
+    for (const e of this.enemies) {
+      if (e.spawnT > 0 || e.dead) continue;
+      if (dist(e.x, e.y, p.x, p.y) > range + e.r) continue;
+      if (angDiff(Math.atan2(e.y - p.y, e.x - p.x), p.aim) > b.arc / 2 + 0.15) continue;
+      this.hurtEnemy(e, dmg, true);
+      e.kx += ax * b.knock;
+      e.ky += ay * b.knock;
     }
-    for (let i = 0; i < count; i++) {
-      const a = p.aim + (i - (count - 1) / 2) * step;
-      this.projs.push({
-        x: p.x + Math.cos(a) * 16, y: p.y + Math.sin(a) * 16,
-        vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
-        r, dmg, life, friendly: true, pierce, bounce: m.bounce, hit: new Set(), color,
-        sprite: c.weapon === 'pierce' ? undefined : c.weaponSprite,
+    if (b.wkind !== 'thrust') {
+      // 베기와 내려치기는 범위 안의 적 투사체를 쳐낸다.
+      this.projs = this.projs.filter((q) => {
+        if (q.friendly) return true;
+        const d = dist(q.x, q.y, p.x, p.y);
+        return !(d < range && angDiff(Math.atan2(q.y - p.y, q.x - p.x), p.aim) < b.arc / 2);
       });
+    }
+    if (b.wkind === 'smash') {
+      this.fx.push({ kind: 'ring', x: p.x + ax * range * 0.7, y: p.y + ay * range * 0.7, t: 0, life: 0.25, r: 34, color: '#e8d8b0' });
     }
   }
 
@@ -702,7 +814,7 @@ export class Game {
     if (e.dead) return;
     let d = base;
     let crit = false;
-    if (fromPlayer && Math.random() < this.m.crit) { d *= 2; crit = true; }
+    if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= 2; crit = true; }
     e.hp -= d;
     e.flash = 0.1;
     this.fx.push({
@@ -710,7 +822,8 @@ export class Game {
       text: String(Math.round(d)), color: crit ? '#ffd24a' : '#ffffff',
     });
     if (fromPlayer) {
-      if (this.m.lifesteal > 0) this.heal(d * this.m.lifesteal);
+      const ls = this.m.lifesteal + this.gs.lifesteal;
+      if (ls > 0) this.heal(d * ls);
       if (this.m.burn > 0) { e.burnT = 3; e.burnDps = 3 * this.m.burn; }
     }
     if (e.hp <= 0) this.killEnemy(e);
@@ -721,6 +834,7 @@ export class Game {
     e.dead = true;
     this.kills++;
     this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.25, r: e.r + 10, color: e.color });
+    if (Math.random() < DROP_CHANCE[e.kind]) this.spawnDrop(e.x, e.y, e.kind === 'boss' ? 2 : 0);
     if (this.m.explode > 0) {
       const R = 60 + this.m.explode * 10;
       this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.25, r: R, color: '#ffb35c' });
@@ -745,9 +859,12 @@ export class Game {
       this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.3, r: 34, color: '#7fd1ff' });
       return;
     }
-    p.hp -= dmg;
+    // 방어: 방어 수치 a에 대해 a / (a + 15) 비율만큼 피해 감소
+    const armor = this.gs.armor;
+    const taken = Math.max(1, dmg * (1 - armor / (armor + 15)));
+    p.hp -= taken;
     p.invuln = 0.7;
-    this.fx.push({ kind: 'text', x: p.x, y: p.y - 20, t: 0, life: 0.6, text: `-${Math.round(dmg)}`, color: '#ff6b6b' });
+    this.fx.push({ kind: 'text', x: p.x, y: p.y - 20, t: 0, life: 0.6, text: `-${Math.round(taken)}`, color: '#ff6b6b' });
     if (this.m.thorns > 0) {
       const R = 90;
       for (const e of this.enemies) {
@@ -785,6 +902,31 @@ export class Game {
       c.fillRect(0, 0, W, H);
     }
 
+    if (this.phase === 'cleared' || this.phase === 'reward') {
+      const pulse = 0.5 + 0.5 * Math.sin(this.time * 4);
+      c.fillStyle = `rgba(255, 230, 140, ${0.15 + 0.15 * pulse})`;
+      c.beginPath();
+      c.arc(EXIT.x, EXIT.y, 26, 0, Math.PI * 2);
+      c.fill();
+      drawSprite(c, 'ladder', EXIT.x, EXIT.y, 2.5);
+    }
+
+    for (const d of this.drops) {
+      const bob = Math.sin(d.t * 3) * 3;
+      const col = RARITY[d.gear.rarity].color;
+      c.fillStyle = 'rgba(0,0,0,0.35)';
+      c.beginPath();
+      c.ellipse(d.x, d.y + 12, 10, 3, 0, 0, Math.PI * 2);
+      c.fill();
+      c.globalAlpha = 0.35;
+      c.fillStyle = col;
+      c.beginPath();
+      c.arc(d.x, d.y + bob, 15, 0, Math.PI * 2);
+      c.fill();
+      c.globalAlpha = 1;
+      drawIcon(c, d.gear.base.sprite, d.x, d.y + bob, 24);
+    }
+
     for (const t of this.turrets) {
       drawSprite(c, 'w_bow', t.x, t.y, 1.6);
       c.fillStyle = 'rgba(255, 217, 102, 0.8)';
@@ -801,7 +943,7 @@ export class Game {
         continue;
       }
       const key = e.kind === 'boss' ? BOSS_SPRITE[e.tier] : ENEMY_SPRITE[e.kind];
-      const scale = Math.max(2, (e.r * 3.2) / S[key].w);
+      const scale = e.kind === 'boss' ? (e.r * 3.2) / S[key].w : clamp((e.r * 3.2) / S[key].w, 2, 3.2);
       const feet = e.y + e.r;
       c.fillStyle = 'rgba(0,0,0,0.3)';
       c.beginPath();
@@ -862,10 +1004,7 @@ export class Game {
       frame: animFrame(this.char.sprite, this.time, p.moving || p.dashT > 0, 10),
       flip: facingLeft,
     });
-    if (this.char.weapon !== 'spread' && this.char.weapon !== 'bolt') {
-      drawSprite(c, this.char.weaponSprite, p.x + Math.cos(p.aim) * 20, p.y - 6 + Math.sin(p.aim) * 20, 1.6,
-        { rot: p.aim + Math.PI / 2 });
-    }
+    this.renderWeapon(c);
     c.globalAlpha = 1;
     if (p.rageT > 0) {
       c.strokeStyle = 'rgba(255, 80, 60, 0.7)';
@@ -911,6 +1050,117 @@ export class Game {
     this.renderHud();
   }
 
+  /** 장착 무기를 휘두르는 모습. 손잡이를 축으로 회전시킨다. */
+  private renderWeapon(c: CanvasRenderingContext2D) {
+    const p = this.p;
+    const b = this.weapon.base;
+    const swinging = p.swingT > 0;
+    const t = swinging ? 1 - p.swingT / p.swingDur : 1;
+    const hx = p.x;
+    const hy = p.y - 8;
+    let ang = p.aim;
+    let reach = 10;
+
+    if (b.wkind === 'slash' || b.wkind === 'smash' || b.wkind === 'staff') {
+      const arc = b.wkind === 'staff' ? 1.2 : Math.max(b.arc, 1.4);
+      const k = b.wkind === 'smash' ? t * t : easeOut(t);
+      const base = swinging ? p.swingAim : p.aim;
+      ang = base + p.swingDir * (-arc / 2 + arc * k);
+      if (!swinging) ang = p.aim + p.swingDir * 0.5; // 대기 자세: 조준 방향 옆으로 든다
+      if (swinging && b.wkind !== 'staff') {
+        // 휘두른 궤적
+        const r = (b.range + this.m.extra * 16) * 0.8;
+        const a0 = p.swingAim - p.swingDir * arc / 2;
+        c.strokeStyle = `rgba(255, 255, 255, ${0.35 * (1 - t * 0.5)})`;
+        c.lineWidth = b.wkind === 'smash' ? 14 : 9;
+        c.beginPath();
+        c.arc(hx, hy, r, Math.min(a0, ang), Math.max(a0, ang));
+        c.stroke();
+      }
+    } else if (b.wkind === 'thrust') {
+      reach += swinging ? Math.sin(t * Math.PI) * 26 : 0;
+    } else {
+      reach = 18 + (swinging ? -Math.sin(t * Math.PI) * 5 : 0);
+    }
+
+    const px = hx + Math.cos(ang) * reach;
+    const py = hy + Math.sin(ang) * reach;
+    if (b.wkind === 'bow') {
+      drawSprite(c, b.sprite, px, py, 1.7, { rot: ang });
+    } else {
+      drawSprite(c, b.sprite, px, py, 1.6, { anchor: 'feet', rot: ang + Math.PI / 2 });
+    }
+  }
+
+  private font(size: number, bold = false) {
+    return `${bold ? 'bold ' : ''}${size}px "Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR",sans-serif`;
+  }
+
+  /** 가까운 드랍 장비의 정보와 현재 장착 장비 비교 */
+  private renderTooltip(c: CanvasRenderingContext2D) {
+    const d = this.near;
+    if (!d) return;
+    const g = d.gear;
+    const cur = this.equip[g.base.slot];
+    const rows: { text: string; color: string; size: number; bold?: boolean }[] = [
+      { text: gearTitle(g), color: RARITY[g.rarity].color, size: 14, bold: true },
+      ...gearLines(g).map((t) => ({ text: t, color: '#e8eaf6', size: 12 })),
+    ];
+    if (cur) {
+      rows.push({ text: `현재: ${gearTitle(cur)}`, color: '#8d93b0', size: 12, bold: true });
+      rows.push(...gearLines(cur).map((t) => ({ text: t, color: '#8d93b0', size: 11 })));
+    }
+    rows.push({ text: '[E] 장착 (현재 장비는 바닥에 놓임)', color: '#ffd54f', size: 12, bold: true });
+    c.textAlign = 'left';
+    let w = 0;
+    for (const r of rows) {
+      c.font = this.font(r.size, r.bold);
+      w = Math.max(w, c.measureText(r.text).width);
+    }
+    const lh = 17;
+    const bw = w + 20;
+    const bh = rows.length * lh + 12;
+    const bx = clamp(d.x - bw / 2, WALL + 4, W - WALL - bw - 4);
+    // 위쪽 공간이 부족하면 장비 아래쪽에 표시한다.
+    const above = d.y - 30 - bh;
+    const by = clamp(above >= WALL + 4 ? above : d.y + 26, WALL + 4, H - WALL - bh - 4);
+    c.fillStyle = 'rgba(12, 13, 20, 0.92)';
+    c.fillRect(bx, by, bw, bh);
+    c.strokeStyle = RARITY[g.rarity].color;
+    c.lineWidth = 1.5;
+    c.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+    rows.forEach((r, i) => {
+      c.font = this.font(r.size, r.bold);
+      c.fillStyle = r.color;
+      c.fillText(r.text, bx + 10, by + 20 + i * lh);
+    });
+  }
+
+  /** 오른쪽 아래 장비 슬롯 */
+  private renderGearHud(c: CanvasRenderingContext2D) {
+    const size = 36;
+    const gap = 6;
+    const x0 = W - 40 - SLOTS.length * (size + gap) + gap;
+    const y0 = H - 40 - size;
+    SLOTS.forEach((slot, i) => {
+      const x = x0 + i * (size + gap);
+      const g = this.equip[slot];
+      c.fillStyle = 'rgba(10, 10, 16, 0.75)';
+      c.fillRect(x, y0, size, size);
+      c.strokeStyle = g ? RARITY[g.rarity].color : 'rgba(255,255,255,0.15)';
+      c.lineWidth = 2;
+      c.strokeRect(x + 1, y0 + 1, size - 2, size - 2);
+      if (g) {
+        drawIcon(c, g.base.sprite, x + size / 2, y0 + size / 2, 26);
+      } else {
+        c.fillStyle = 'rgba(255,255,255,0.3)';
+        c.font = this.font(10);
+        c.textAlign = 'center';
+        c.fillText(['무기', '투구', '갑옷', '신발', '장신구'][i], x + size / 2, y0 + size / 2 + 4);
+      }
+    });
+  }
+
   private renderHud() {
     const c = this.ctx;
     const p = this.p;
@@ -925,7 +1175,7 @@ export class Game {
     c.fillText(`HP ${Math.ceil(p.hp)}/${p.maxHp}`, 46, 48);
 
     const sk = skillById(p.skillId);
-    const full = sk.cd * this.m.skillCd;
+    const full = sk.cd * this.skillCdMul();
     c.fillStyle = '#000a';
     c.fillRect(40, 56, 200, 12);
     c.fillStyle = p.skillCd > 0 ? '#5a6a9a' : '#7fd1ff';
@@ -958,6 +1208,15 @@ export class Game {
       c.fillStyle = '#fff';
       c.fillText(BOSS_NAME[boss.tier], W / 2, 36);
     }
+
+    this.renderGearHud(c);
+    if (this.phase === 'cleared') {
+      c.textAlign = 'center';
+      c.font = this.font(14, true);
+      c.fillStyle = '#ffe9a0';
+      c.fillText(this.room >= FINAL_ROOM ? '사다리에 올라 던전을 탈출하세요' : '장비를 정리하고 위쪽 사다리로 이동하세요', W / 2, EXIT.y + 46);
+    }
+    this.renderTooltip(c);
 
     if (this.bannerT > 0) {
       c.globalAlpha = Math.min(1, this.bannerT);

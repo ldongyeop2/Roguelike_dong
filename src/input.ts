@@ -14,6 +14,7 @@ export class Input {
   down = false;
   private skillEdge = false;
   private pauseEdge = false;
+  private interactEdge = false;
 
   constructor(private canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
@@ -22,6 +23,7 @@ export class Input {
       this.keys.add(e.code);
       if (e.code === 'Space') this.skillEdge = true;
       if (e.code === 'Escape' || e.code === 'KeyP') this.pauseEdge = true;
+      if (e.code === 'KeyE') this.interactEdge = true;
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => {
@@ -63,6 +65,12 @@ export class Input {
   takeSkill(): boolean {
     const v = this.skillEdge;
     this.skillEdge = false;
+    return v;
+  }
+
+  takeInteract(): boolean {
+    const v = this.interactEdge;
+    this.interactEdge = false;
     return v;
   }
 

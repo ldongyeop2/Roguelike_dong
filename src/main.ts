@@ -38,7 +38,9 @@ function startRun(charId: string) {
     },
     onPause: (paused) => {
       if (!paused) return ui.hide();
+      if (!game) return;
       ui.showPause(
+        game.equipment(),
         () => {
           if (game) game.paused = false;
           ui.hide();
@@ -54,6 +56,9 @@ function startRun(charId: string) {
     },
   });
 }
+
+// 개발 모드에서만 자동 테스트용으로 현재 게임을 노출한다.
+if (import.meta.env.DEV) Object.defineProperty(window, '__game', { get: () => game });
 
 function frame(now: number) {
   const dt = (now - last) / 1000;

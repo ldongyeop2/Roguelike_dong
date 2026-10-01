@@ -1,6 +1,10 @@
 // 스프라이트 시트 로드와 그리기
 import sheetUrl from './assets/dungeon-tileset-ii.png';
+import { GEN_SIZE, genCanvas, genUrl, isGenKey, type GenKey } from './icons';
 import { S, type SpriteKey, type Spr } from './spritesheet';
+
+/** 시트 스프라이트 또는 코드로 그린 아이콘 */
+export type IconRef = SpriteKey | GenKey;
 
 const SHEET = 512;
 const sheet = new Image();
@@ -54,9 +58,25 @@ export function drawSprite(c: CanvasRenderingContext2D, key: SpriteKey, x: numbe
   c.restore();
 }
 
-/** DOM 요소에 스프라이트를 px 크기 상자에 맞춰 표시하는 인라인 스타일 */
-export function spriteStyle(key: SpriteKey, px: number): string {
-  const s: Spr = S[key];
+/** 아이콘을 size 크기 상자 안에 맞춰 그린다. */
+export function drawIcon(c: CanvasRenderingContext2D, ref: IconRef, x: number, y: number, size: number) {
+  if (isGenKey(ref)) {
+    c.imageSmoothingEnabled = false;
+    c.drawImage(genCanvas(ref), x - size / 2, y - size / 2, size, size);
+    return;
+  }
+  const s: Spr = S[ref];
+  drawSprite(c, ref, x, y, size / Math.max(s.w, s.h));
+}
+
+/** DOM 요소에 아이콘을 px 크기 상자에 맞춰 표시하는 인라인 스타일 */
+export function spriteStyle(ref: IconRef, px: number): string {
+  if (isGenKey(ref)) {
+    const k = Math.floor(px / GEN_SIZE);
+    return `width:${GEN_SIZE * k}px;height:${GEN_SIZE * k}px;flex:none;background-image:url(${genUrl(ref)});` +
+      `background-size:100% 100%;image-rendering:pixelated`;
+  }
+  const s: Spr = S[ref];
   const k = Math.floor(px / Math.max(s.w, s.h)) || px / Math.max(s.w, s.h);
   return `width:${s.w * k}px;height:${s.h * k}px;flex:none;background-image:url(${sheetUrl});` +
     `background-size:${SHEET * k}px ${SHEET * k}px;background-position:-${s.x * k}px -${s.y * k}px;` +

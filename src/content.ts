@@ -1,3 +1,5 @@
+import { GEAR_BASES, type GearBase } from './gear';
+import type { IconRef } from './sprites';
 import type { SpriteKey } from './spritesheet';
 
 // 게임 콘텐츠 정의. 해금 조건(unlock)이 없는 항목은 처음부터 사용 가능하다.
@@ -70,24 +72,21 @@ export const baseMods = (): Mods => ({
 
 interface Base {
   id: string;
-  sprite: SpriteKey;
+  sprite: IconRef;
   name: string;
   desc: string;
   unlock?: Unlock;
 }
 
-export type Weapon = 'melee' | 'bolt' | 'pierce' | 'spread';
 
 export interface CharDef extends Base {
   kind: 'char';
+  sprite: SpriteKey;
   hp: number;
   speed: number;
-  weapon: Weapon;
-  dmg: number;
-  cd: number;
+  startWeapon: string; // 시작 무기 id (gear.ts)
   skill: string;
   color: string;
-  weaponSprite: SpriteKey;
 }
 
 export interface ItemDef extends Base {
@@ -100,36 +99,36 @@ export interface SkillDef extends Base {
   cd: number;
 }
 
-export type AnyDef = CharDef | ItemDef | SkillDef;
+export type AnyDef = CharDef | ItemDef | SkillDef | GearBase;
 
 export const CHARACTERS: CharDef[] = [
   {
-    kind: 'char', id: 'knight', sprite: 'knight_m', weaponSprite: 'w_knight', name: '기사', color: '#6fa8dc',
-    desc: '부채꼴로 검을 휘둘러 적과 투사체를 베어냅니다. 튼튼합니다.',
-    hp: 120, speed: 190, weapon: 'melee', dmg: 24, cd: 0.5, skill: 'barrier',
+    kind: 'char', id: 'knight', sprite: 'knight_m', name: '기사', color: '#6fa8dc',
+    desc: '기사의 검을 들고 시작합니다. 체력이 높고 방벽 스킬로 버팁니다.',
+    hp: 120, speed: 190, startWeapon: 'knight_sword', skill: 'barrier',
   },
   {
-    kind: 'char', id: 'ranger', sprite: 'elf_m', weaponSprite: 'w_arrow', name: '레인저', color: '#93c47d',
-    desc: '빠르게 화살을 쏩니다. 거리를 유지하며 싸우는 기본형.',
-    hp: 85, speed: 210, weapon: 'bolt', dmg: 11, cd: 0.3, skill: 'dash',
+    kind: 'char', id: 'ranger', sprite: 'elf_m', name: '레인저', color: '#93c47d',
+    desc: '장궁을 들고 시작합니다. 거리를 유지하며 화살로 싸웁니다.',
+    hp: 85, speed: 210, startWeapon: 'bow', skill: 'dash',
     unlock: { stat: 'bestRoom', target: 3 },
   },
   {
-    kind: 'char', id: 'rogue', sprite: 'lizard_m', weaponSprite: 'w_dagger', name: '도적', color: '#c27ba0',
-    desc: '단검 3발을 부채꼴로 던집니다. 사거리가 짧지만 가까우면 강력합니다.',
-    hp: 80, speed: 240, weapon: 'spread', dmg: 8, cd: 0.5, skill: 'dash',
+    kind: 'char', id: 'rogue', sprite: 'lizard_m', name: '도적', color: '#c27ba0',
+    desc: '단검을 들고 시작합니다. 가장 빠르고, 짧고 빠른 베기로 싸웁니다.',
+    hp: 80, speed: 240, startWeapon: 'dagger', skill: 'dash',
     unlock: { stat: 'deaths', target: 4 },
   },
   {
-    kind: 'char', id: 'mage', sprite: 'wizard_m', weaponSprite: 'w_staff_red', name: '마법사', color: '#8e7cc3',
-    desc: '느리지만 적을 꿰뚫는 큰 마력구를 발사합니다.',
-    hp: 70, speed: 190, weapon: 'pierce', dmg: 30, cd: 0.85, skill: 'nova',
+    kind: 'char', id: 'mage', sprite: 'wizard_m', name: '마법사', color: '#8e7cc3',
+    desc: '화염 지팡이를 들고 시작합니다. 적을 꿰뚫는 마력구를 발사합니다.',
+    hp: 70, speed: 190, startWeapon: 'staff_red', skill: 'nova',
     unlock: { stat: 'totalKills', target: 150 },
   },
   {
-    kind: 'char', id: 'berserker', sprite: 'dwarf_m', weaponSprite: 'w_axe', name: '광전사', color: '#e06666',
-    desc: '체력이 낮을수록 피해가 최대 2배까지 증가합니다. 빠른 근접 공격.',
-    hp: 110, speed: 200, weapon: 'melee', dmg: 20, cd: 0.38, skill: 'rage',
+    kind: 'char', id: 'berserker', sprite: 'dwarf_m', name: '광전사', color: '#e06666',
+    desc: '양날 도끼를 들고 시작합니다. 체력이 낮을수록 피해가 최대 2배까지 증가합니다.',
+    hp: 110, speed: 200, startWeapon: 'double_axe', skill: 'rage',
     unlock: { stat: 'bossKills', target: 1 },
   },
 ];
@@ -163,7 +162,7 @@ export const ITEMS: ItemDef[] = [
   { kind: 'item', id: 'sharp', sprite: 'w_serrated', name: '날카로운 날', desc: '피해 +20%', apply: (m) => { m.dmg *= 1.2; } },
   { kind: 'item', id: 'boots', sprite: 'potion_blue', name: '신속의 장화', desc: '이동 속도 +15%', apply: (m) => { m.speed *= 1.15; } },
   { kind: 'item', id: 'heart', sprite: 'heart', name: '강화 심장', desc: '최대 체력 +25 (같은 양 회복)', apply: (m) => { m.maxHp += 25; } },
-  { kind: 'item', id: 'quick', sprite: 'w_rapier', name: '빠른 손', desc: '공격 속도 +20%', apply: (m) => { m.rate *= 1.2; } },
+  { kind: 'item', id: 'quick', sprite: 'w_katana', name: '빠른 손', desc: '공격 속도 +20%', apply: (m) => { m.rate *= 1.2; } },
   { kind: 'item', id: 'pierce', sprite: 'w_arrow', name: '철갑탄', desc: '관통 +1 (근접은 범위 증가)', apply: (m) => { m.pierce += 1; m.extra += 0.5; } },
   { kind: 'item', id: 'double', sprite: 'w_dagger', name: '쌍발', desc: '투사체 +1 (근접은 범위 증가)', apply: (m) => { m.extra += 1; } },
   // 해금 필요
@@ -213,7 +212,7 @@ export const ITEMS: ItemDef[] = [
   },
 ];
 
-export const ALL_DEFS: AnyDef[] = [...CHARACTERS, ...ITEMS, ...SKILLS];
+export const ALL_DEFS: AnyDef[] = [...CHARACTERS, ...ITEMS, ...SKILLS, ...GEAR_BASES];
 
 export const defById = (id: string): AnyDef | undefined => ALL_DEFS.find((d) => d.id === id);
 export const itemById = (id: string) => ITEMS.find((d) => d.id === id)!;
