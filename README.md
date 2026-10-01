@@ -61,7 +61,7 @@ npm run build:single  # 호스팅용 페이지 (dist/play.html + dist/sprite-0.p
 
 ## 에셋
 
-그래픽은 Kenney의 [Tiny Dungeon](https://kenney.nl/assets/tiny-dungeon) 팩을 사용합니다(CC0 1.0, 출처 표기 의무 없음). 원본 라이선스 파일은 `src/assets/KENNEY_LICENSE.txt`에 있습니다. 시트는 16x16 타일이 12열 x 11행으로 배치되어 있고, 각 항목의 `sprite` 값은 왼쪽 위부터 0으로 센 타일 번호입니다.
+그래픽은 0x72(Robert)의 [16x16 DungeonTileset II](https://0x72.itch.io/dungeontileset-ii) v1.7 시트를 사용합니다(CC0, 출처 표기 의무 없음). 출처와 라이선스는 `src/assets/ASSET_LICENSE.md`에 정리했습니다. 스프라이트 좌표와 애니메이션 프레임 수는 `src/spritesheet.ts`에 있고, 콘텐츠의 `sprite` 값은 그 표의 키입니다.
 
 ## 코드 구조
 
@@ -71,7 +71,8 @@ npm run build:single  # 호스팅용 페이지 (dist/play.html + dist/sprite-0.p
 | `src/meta.ts` | 저장(localStorage), 누적 통계, 해금 판정 |
 | `src/game.ts` | 런 시뮬레이션: 플레이어, 적, 투사체, 보스, 보상 생성, 렌더링 |
 | `src/ui.ts` | 메뉴, 해금 도감, 보상 선택, 결과 화면 (DOM 오버레이) |
-| `src/sprites.ts` | 스프라이트 시트 로드, 그리기, 배경 타일 |
+| `src/spritesheet.ts` | 스프라이트 좌표표 |
+| `src/sprites.ts` | 스프라이트 시트 로드, 그리기, 애니메이션, 배경 타일 |
 | `src/input.ts` | 키보드/마우스 입력 |
 | `src/main.ts` | 화면 전환과 게임 루프 |
 

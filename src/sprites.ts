@@ -1,10 +1,8 @@
-// Kenney "Tiny Dungeon" (CC0) 스프라이트 시트. 16x16 타일 12열 x 11행.
-import sheetUrl from './assets/tiny-dungeon.png';
+// 스프라이트 시트 로드와 그리기
+import sheetUrl from './assets/dungeon-tileset-ii.png';
+import { S, type SpriteKey, type Spr } from './spritesheet';
 
-const TILE = 16;
-const COLS = 12;
-const ROWS = 11;
-
+const SHEET = 512;
 const sheet = new Image();
 let white: HTMLCanvasElement | null = null; // 피격 깜빡임용 흰색 실루엣
 
@@ -24,31 +22,44 @@ sheet.src = sheetUrl;
 export const spritesReady = () => sheet.complete && sheet.naturalWidth > 0;
 
 export interface DrawOpts {
+  frame?: number;
   flip?: boolean;
   rot?: number;
   flash?: boolean;
+  /** 기준점: center(기본) 또는 feet(아래 가운데) */
+  anchor?: 'center' | 'feet';
 }
 
-/** 스프라이트 idx를 (x, y) 중심에 size 크기로 그린다. */
-export function drawSprite(c: CanvasRenderingContext2D, idx: number, x: number, y: number, size: number, o: DrawOpts = {}) {
+/** 애니메이션 프레임 번호. moving이면 이동(4~7), 아니면 대기(0~3). */
+export function animFrame(key: SpriteKey, t: number, moving: boolean, fps = 8): number {
+  const n = (S[key] as Spr).n ?? 1;
+  if (n < 4) return 0;
+  const f = Math.floor(t * fps) % 4;
+  return moving && n >= 8 ? 4 + f : f;
+}
+
+/** 시트의 스프라이트를 scale 배로 (x, y)에 그린다. */
+export function drawSprite(c: CanvasRenderingContext2D, key: SpriteKey, x: number, y: number, scale: number, o: DrawOpts = {}) {
+  const s: Spr = S[key];
   const src = o.flash && white ? white : sheet;
-  const sx = (idx % COLS) * TILE;
-  const sy = Math.floor(idx / COLS) * TILE;
+  const w = s.w * scale;
+  const h = s.h * scale;
   c.save();
   c.translate(x, y);
   if (o.rot) c.rotate(o.rot);
   if (o.flip) c.scale(-1, 1);
   c.imageSmoothingEnabled = false;
-  c.drawImage(src, sx, sy, TILE, TILE, -size / 2, -size / 2, size, size);
+  const oy = o.anchor === 'feet' ? -h : -h / 2;
+  c.drawImage(src, s.x + (o.frame ?? 0) * s.w, s.y, s.w, s.h, -w / 2, oy, w, h);
   c.restore();
 }
 
-/** DOM 요소에 스프라이트를 배경으로 표시하기 위한 인라인 스타일 */
-export function spriteStyle(idx: number, px: number): string {
-  const col = idx % COLS;
-  const row = Math.floor(idx / COLS);
-  return `width:${px}px;height:${px}px;flex:none;background-image:url(${sheetUrl});` +
-    `background-size:${COLS * px}px ${ROWS * px}px;background-position:-${col * px}px -${row * px}px;` +
+/** DOM 요소에 스프라이트를 px 크기 상자에 맞춰 표시하는 인라인 스타일 */
+export function spriteStyle(key: SpriteKey, px: number): string {
+  const s: Spr = S[key];
+  const k = Math.floor(px / Math.max(s.w, s.h)) || px / Math.max(s.w, s.h);
+  return `width:${s.w * k}px;height:${s.h * k}px;flex:none;background-image:url(${sheetUrl});` +
+    `background-size:${SHEET * k}px ${SHEET * k}px;background-position:-${s.x * k}px -${s.y * k}px;` +
     'background-repeat:no-repeat;image-rendering:pixelated';
 }
 
@@ -62,21 +73,23 @@ export function background(w: number, h: number, wall: number): HTMLCanvasElemen
   cv.height = h;
   const c = cv.getContext('2d')!;
   const T = 32;
-  c.fillStyle = '#2a2c38';
+  c.fillStyle = '#1b1820';
   c.fillRect(0, 0, w, h);
-  for (let y = 0; y < h; y += T) for (let x = 0; x < w; x += T) drawSprite(c, 40, x + T / 2, y + T / 2, T);
+  for (let y = 0; y < h; y += T) for (let x = 0; x < w; x += T) drawSprite(c, 'wall', x + T / 2, y + T / 2, 2);
   c.save();
   c.beginPath();
   c.rect(wall, wall, w - wall * 2, h - wall * 2);
   c.clip();
-  // 바닥 타일: 대부분 기본 모래, 일부 자갈 무늬. 고정 시드로 매번 같은 배치.
+  // 바닥 타일: 대부분 기본 바닥, 일부 금 간 바닥. 고정 시드로 매번 같은 배치.
   let seed = 7;
-  const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+  const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  const cracked: SpriteKey[] = ['floor_2', 'floor_3', 'floor_4'];
   for (let y = wall; y < h - wall; y += T) {
-    for (let x = wall; x < w - wall; x += T) drawSprite(c, rnd() < 0.15 ? 49 : 48, x + T / 2, y + T / 2, T);
+    for (let x = wall; x < w - wall; x += T) {
+      const r = rnd();
+      drawSprite(c, r < 0.18 ? cracked[Math.floor(r * 100) % 3] : 'floor_1', x + T / 2, y + T / 2, 2);
+    }
   }
-  c.fillStyle = 'rgba(20, 16, 24, 0.5)'; // 캐릭터가 묻히지 않도록 바닥을 약간 어둡게
-  c.fillRect(wall, wall, w - wall * 2, h - wall * 2);
   c.restore();
   c.strokeStyle = 'rgba(0,0,0,0.6)';
   c.lineWidth = 3;

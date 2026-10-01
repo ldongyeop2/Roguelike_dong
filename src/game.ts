@@ -4,7 +4,8 @@ import {
 } from './content';
 import type { Input } from './input';
 import type { RunResult } from './meta';
-import { background, drawSprite } from './sprites';
+import { animFrame, background, drawSprite } from './sprites';
+import { S, type SpriteKey } from './spritesheet';
 import { angDiff, clamp, dist, rand, shuffle } from './util';
 
 export const W = 960;
@@ -15,10 +16,10 @@ const BOSS_EVERY = 5;
 
 type EnemyKind = 'grunt' | 'archer' | 'charger' | 'swarm' | 'brute' | 'boss';
 
-const ENEMY_SPRITE: Record<Exclude<EnemyKind, 'boss'>, number> = {
-  grunt: 110, archer: 121, swarm: 120, charger: 123, brute: 109,
+const ENEMY_SPRITE: Record<Exclude<EnemyKind, 'boss'>, SpriteKey> = {
+  grunt: 'orc_warrior', archer: 'orc_shaman', swarm: 'imp', charger: 'chort', brute: 'pumpkin',
 };
-const BOSS_SPRITE = [0, 124, 122, 97];
+const BOSS_SPRITE: SpriteKey[] = ['big_zombie', 'big_zombie', 'ogre', 'big_demon'];
 const BOSS_NAME = ['', '파수꾼', '군주', '심연의 왕'];
 
 interface EnemyStat { hp: number; r: number; speed: number; dmg: number; color: string; cost: number; minRoom: number }
@@ -62,7 +63,7 @@ interface Proj {
   pierce: number; bounce: number;
   hit: Set<number>;
   color: string;
-  sprite?: number;
+  sprite?: SpriteKey;
 }
 
 interface Turret { x: number; y: number; t: number; cd: number }
@@ -78,7 +79,7 @@ export interface Card {
   id: string;
   name: string;
   desc: string;
-  sprite: number;
+  sprite: SpriteKey;
 }
 
 export interface GameEvents {
@@ -99,7 +100,7 @@ export class Game {
     x: W / 2, y: H / 2, r: 13, hp: 0, maxHp: 0,
     aim: 0, atkCd: 0, skillCd: 0, skillId: '',
     invuln: 0, dashT: 0, dashX: 0, dashY: 0,
-    shieldT: 0, rageT: 0, slowT: 0, orbitA: 0, hpAcc: 0,
+    shieldT: 0, rageT: 0, slowT: 0, orbitA: 0, hpAcc: 0, moving: false,
   };
 
   private enemies: Enemy[] = [];
@@ -114,6 +115,7 @@ export class Game {
   private clearT = 0;
   private bannerT = 0;
   paused = false;
+  private time = 0; // 애니메이션용 누적 시간
   private itemCounts = new Map<string, number>();
 
   private kills = 0;
@@ -243,7 +245,7 @@ export class Game {
     const n = Math.min(5, this.m.choices);
     const cards: Card[] = [];
     if (this.p.hp / this.p.maxHp < 0.6) {
-      cards.push({ kind: 'heal', id: 'heal', sprite: 115, name: '응급 치료', desc: '최대 체력의 40%를 회복합니다.' });
+      cards.push({ kind: 'heal', id: 'heal', sprite: 'heart', name: '응급 치료', desc: '최대 체력의 40%를 회복합니다.' });
     }
     const items = shuffle(ITEMS.filter((i) => this.unlocked.has(i.id)));
     const skills = shuffle(SKILLS.filter((s) => this.unlocked.has(s.id) && s.id !== this.p.skillId));
@@ -294,6 +296,7 @@ export class Game {
       return;
     }
     const dt = Math.min(dtRaw, 1 / 30);
+    this.time += dt;
 
     this.updateFx(dt);
     if (this.phase === 'reward') return;
@@ -355,6 +358,7 @@ export class Game {
       p.y += p.dashY * 700 * dt;
     } else {
       const a = this.input.axis();
+      p.moving = a.x !== 0 || a.y !== 0;
       const sp = this.char.speed * this.m.speed;
       p.x += a.x * sp * dt;
       p.y += a.y * sp * dt;
@@ -782,9 +786,9 @@ export class Game {
     }
 
     for (const t of this.turrets) {
-      drawSprite(c, 64, t.x, t.y, 30);
+      drawSprite(c, 'w_bow', t.x, t.y, 1.6);
       c.fillStyle = 'rgba(255, 217, 102, 0.8)';
-      c.fillRect(t.x - 14, t.y + 17, 28 * (t.t / 8), 3);
+      c.fillRect(t.x - 14, t.y + 26, 28 * (t.t / 8), 3);
     }
 
     for (const e of this.enemies) {
@@ -796,10 +800,12 @@ export class Game {
         c.stroke();
         continue;
       }
-      const size = Math.max(24, e.r * 2.6);
+      const key = e.kind === 'boss' ? BOSS_SPRITE[e.tier] : ENEMY_SPRITE[e.kind];
+      const scale = Math.max(2, (e.r * 3.2) / S[key].w);
+      const feet = e.y + e.r;
       c.fillStyle = 'rgba(0,0,0,0.3)';
       c.beginPath();
-      c.ellipse(e.x, e.y + size * 0.42, size * 0.32, size * 0.1, 0, 0, Math.PI * 2);
+      c.ellipse(e.x, feet, e.r * 0.9, e.r * 0.3, 0, 0, Math.PI * 2);
       c.fill();
       if (e.burnT > 0) {
         c.fillStyle = 'rgba(255, 140, 50, 0.35)';
@@ -807,20 +813,25 @@ export class Game {
         c.arc(e.x, e.y, e.r + 4, 0, Math.PI * 2);
         c.fill();
       }
-      const idx = e.kind === 'boss' ? BOSS_SPRITE[e.tier] : ENEMY_SPRITE[e.kind];
-      drawSprite(c, idx, e.x, e.y, size, { flip: this.p.x < e.x, flash: e.flash > 0 || e.state === 1 });
+      drawSprite(c, key, e.x, feet, scale, {
+        anchor: 'feet',
+        frame: animFrame(key, this.time + e.id * 0.37, e.state !== 1),
+        flip: this.p.x < e.x,
+        flash: e.flash > 0 || e.state === 1,
+      });
       if (e.kind !== 'boss' && e.hp < e.maxHp) {
+        const top = feet - S[key].h * scale - 6;
         c.fillStyle = '#000a';
-        c.fillRect(e.x - e.r, e.y - size / 2 - 6, e.r * 2, 3);
+        c.fillRect(e.x - e.r, top, e.r * 2, 3);
         c.fillStyle = '#7bd88f';
-        c.fillRect(e.x - e.r, e.y - size / 2 - 6, (e.r * 2 * Math.max(0, e.hp)) / e.maxHp, 3);
+        c.fillRect(e.x - e.r, top, (e.r * 2 * Math.max(0, e.hp)) / e.maxHp, 3);
       }
     }
 
     for (const q of this.projs) {
       if (q.sprite !== undefined) {
         // 무기 스프라이트는 위쪽을 향하므로 진행 방향에 맞춰 90도 보정한다.
-        drawSprite(c, q.sprite, q.x, q.y, 22, { rot: Math.atan2(q.vy, q.vx) + Math.PI / 2 });
+        drawSprite(c, q.sprite, q.x, q.y, 1.6, { rot: Math.atan2(q.vy, q.vx) + Math.PI / 2 });
         continue;
       }
       if (q.friendly && q.r >= 8) {
@@ -838,17 +849,21 @@ export class Game {
     const p = this.p;
     for (let i = 0; i < this.m.orbit; i++) {
       const a = p.orbitA + (i * Math.PI * 2) / this.m.orbit;
-      drawSprite(c, 107, p.x + Math.cos(a) * 58, p.y + Math.sin(a) * 58, 24, { rot: a + Math.PI });
+      drawSprite(c, 'w_knight', p.x + Math.cos(a) * 58, p.y + Math.sin(a) * 58, 1.2, { rot: a + Math.PI });
     }
     c.globalAlpha = p.invuln > 0 && Math.floor(p.invuln * 20) % 2 === 0 ? 0.4 : 1;
     const facingLeft = Math.cos(p.aim) < 0;
     c.fillStyle = 'rgba(0,0,0,0.3)';
     c.beginPath();
-    c.ellipse(p.x, p.y + 14, 11, 4, 0, 0, Math.PI * 2);
+    c.ellipse(p.x, p.y + p.r, 11, 4, 0, 0, Math.PI * 2);
     c.fill();
-    drawSprite(c, this.char.sprite, p.x, p.y, 34, { flip: facingLeft });
+    drawSprite(c, this.char.sprite, p.x, p.y + p.r, 2.5, {
+      anchor: 'feet',
+      frame: animFrame(this.char.sprite, this.time, p.moving || p.dashT > 0, 10),
+      flip: facingLeft,
+    });
     if (this.char.weapon !== 'spread' && this.char.weapon !== 'bolt') {
-      drawSprite(c, this.char.weaponSprite, p.x + Math.cos(p.aim) * 18, p.y + Math.sin(p.aim) * 18, 22,
+      drawSprite(c, this.char.weaponSprite, p.x + Math.cos(p.aim) * 20, p.y - 6 + Math.sin(p.aim) * 20, 1.6,
         { rot: p.aim + Math.PI / 2 });
     }
     c.globalAlpha = 1;
@@ -877,6 +892,7 @@ export class Game {
         c.arc(f.x, f.y, (f.r ?? 20) * (0.4 + 0.6 * k), 0, Math.PI * 2);
         c.stroke();
       } else if (f.kind === 'arc') {
+        c.globalAlpha = (1 - k) * 0.45;
         c.fillStyle = f.color;
         c.beginPath();
         c.moveTo(f.x, f.y);

@@ -4,8 +4,9 @@ import {
 import { isUnlocked, progressOf, type RunResult, type Save } from './meta';
 import type { Card } from './game';
 import { spriteStyle } from './sprites';
+import type { SpriteKey } from './spritesheet';
 
-const icon = (idx: number, px = 32) => `<i class="icon" style="${spriteStyle(idx, px)}"></i>`;
+const icon = (key: SpriteKey, px = 32) => `<span class="icon"><i style="${spriteStyle(key, px)}"></i></span>`;
 
 const KIND_LABEL = { char: '캐릭터', item: '아이템', skill: '스킬' } as const;
 
