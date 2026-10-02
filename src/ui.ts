@@ -95,11 +95,15 @@ export class UI {
     });
   }
 
-  /** 1차 직업 한 줄과 그 아래 상위 직업 두 갈래 */
+  /** 1차 직업 한 줄과 그 아래 각성 갈래(2차 → 3차) */
   private jobRow(save: Save, c: CharDef): string {
-    const branch = nextJobs(c).map((j) => isUnlocked(save, j.id)
+    const name = (j: CharDef) => isUnlocked(save, j.id)
       ? `<span class="branch" style="color:${j.color}">${j.name}</span>`
-      : `<span class="branch locked" title="${unlockText(j.unlock!)}">??? <small>${unlockText(j.unlock!)}</small></span>`).join('');
+      : `<span class="branch locked" title="${unlockText(j.unlock!)}">??? <small>${unlockText(j.unlock!)}</small></span>`;
+    const branch = nextJobs(c).map((j2) => {
+      const t3 = nextJobs(j2);
+      return name(j2) + (t3.length ? ` <small>→</small> ${t3.map(name).join(' / ')}` : '');
+    }).join('');
     if (!isUnlocked(save, c.id)) {
       const pr = progressOf(save, c.unlock!);
       return `<div class="hero-row locked">${jobIcon(c)}<div><div class="nm">???</div>
@@ -108,7 +112,7 @@ export class UI {
     }
     const w = weaponById(c.startWeapon);
     return `<div class="hero-row">${jobIcon(c)}
-      <div><div class="nm">${c.name} <span class="ds">${w.name} · ${skillById(c.skill).name}</span></div><div class="branches">${branch}</div></div></div>`;
+      <div><div class="nm">${c.name} <span class="ds">${w.name} · ${skillById(c.skill).name}</span></div>${branch ? `<div class="branches">${branch}</div>` : ''}</div></div>`;
   }
 
   private heroCard(): string {
@@ -136,7 +140,10 @@ export class UI {
     return `<section class="codex">
       <div class="top"><h1>해금 도감</h1><button data-tab="play">닫기</button></div>
       <p class="sub">죽음과 기록이 쌓일수록 새 직업, 스킬, 아이템, 장비가 던전에 등장합니다.</p>
-      ${sec('1차 직업', CHARACTERS.filter((c) => c.tier === 1)) + sec('상위 직업', CHARACTERS.filter((c) => c.tier === 2))}
+      ${([1, 2, 3] as const).map((t) => {
+        const jobs = CHARACTERS.filter((c) => c.tier === t);
+        return jobs.length ? sec(t === 1 ? '1차 전직' : `${t}차 각성`, jobs) : '';
+      }).join('')}
       ${sec('스킬', SKILLS) + sec('아이템', ITEMS)}
       ${this.synergySection(save)}
       ${sec('장비: 무기', WEAPONS) + sec('장비: 방어구와 장신구', ARMORS)}
@@ -184,8 +191,8 @@ export class UI {
     };
     const jobs = ids.map(charById);
     const el = this.mount(
-      `<h1>${tier === 1 ? '전직의 제단' : '상위 전직'}</h1>
-       <div class="sub">${tier === 1 ? '나아갈 길을 고르세요. 무기와 스킬이 직업에 맞게 바뀝니다(쓰던 무기는 발밑에 남습니다).' : '직업의 길을 더 깊이 걸어갑니다. 상위 직업의 태그는 세트 효과에 1개로 셉니다.'}</div>
+      `<h1>${tier === 1 ? '1차 전직' : `${tier}차 각성`}</h1>
+       <div class="sub">${tier === 1 ? '나아갈 길을 고르세요. 무기와 스킬이 직업에 맞게 바뀝니다(쓰던 무기는 발밑에 남습니다).' : '직업의 길을 더 깊이 걸어갑니다. 각성 직업의 태그는 세트 효과에 1개로 셉니다.'}</div>
        <div class="rewards">${jobs.map(card).join('')}</div>`,
       'screen dim');
     el.querySelectorAll<HTMLElement>('[data-id]').forEach((b) =>

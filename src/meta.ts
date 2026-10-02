@@ -46,9 +46,12 @@ export function loadSave(): Save {
     if (!raw) return base;
     const parsed = JSON.parse(raw) as Partial<Save>;
     const unlocked = new Set([...base.unlocked, ...(parsed.unlocked ?? [])]);
+    const stats = { ...base.stats, ...(parsed.stats ?? {}) };
+    // 콘텐츠가 바뀌어 조건을 이미 채운 항목이 생겼을 수 있으니 불러올 때도 해금을 판정한다.
+    for (const d of ALL_DEFS) if (d.unlock && stats[d.unlock.stat] >= d.unlock.target) unlocked.add(d.id);
     return {
       unlocked: [...unlocked],
-      stats: { ...base.stats, ...(parsed.stats ?? {}) },
+      stats,
       lastChar: parsed.lastChar ?? base.lastChar,
       discovered: parsed.discovered ?? [],
     };

@@ -19,6 +19,7 @@ export const S = {
   // 캐릭터
   knight_m: char(100),
   elf_m: char(36),
+  elf_f: char(4),
   wizard_m: char(164),
   lizard_m: char(228),
   dwarf_m: char(292),

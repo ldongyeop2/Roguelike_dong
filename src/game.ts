@@ -26,8 +26,8 @@ const BOSS_EVERY = 5;
 const isRewardRoom = (n: number) => n % BOSS_EVERY === 0 || n % BOSS_EVERY === 3;
 /** 일반 방 클리어 시 장비가 나올 확률 (보스 방은 보장) */
 const CLEAR_DROP_CHANCE = 0.3;
-/** 전직 제단이 나오는 방과 그때 고르는 전직 단계 */
-const JOB_ROOMS: Record<number, 1 | 2> = { 2: 1, 5: 2 };
+/** 전직 제단이 나오는 방(보스 방)과 그때 고르는 단계: 1차 전직, 2차 각성, 3차 각성 */
+const JOB_ROOMS: Record<number, 1 | 2 | 3> = { 5: 1, 10: 2, 15: 3 };
 
 type EnemyKind = 'grunt' | 'archer' | 'charger' | 'swarm' | 'brute' | 'boss';
 
@@ -153,15 +153,11 @@ const ENTER_T = 0.5; // 새 방에 떨어져 내려오는 시간
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private job: CharDef; // 현재 직업
-  private line = ''; // 1차 직업 id(상위 직업도 같은 계열로 본다)
   private baseHp = 100;
   private baseSpeed = 200;
   private sprite: SpriteKey = 'elf_m';
-  private altar: { x: number; y: number; tier: 1 | 2; used: boolean } | null = null;
+  private altar: { x: number; y: number; tier: 1 | 2 | 3; used: boolean } | null = null;
   private nearAltar = false;
-  private stillT = 0; // 저격수: 멈춰 있던 시간
-  private assassinT = 0; // 암살자: 대시 후 확정 치명타 시간
-  private undyingUsed = false;
   private m: Mods = baseMods();
   private unlocked: Set<string>;
 
@@ -248,7 +244,8 @@ export class Game {
     this.chest = isRewardRoom(n) ? { x: CHEST.x, y: CHEST.y, openT: -1, looted: false } : null;
     this.nearChest = false;
     const jt = JOB_ROOMS[n];
-    this.altar = jt && this.job.tier < jt ? { x: ALTAR.x, y: ALTAR.y, tier: jt, used: false } : null;
+    // 고를 다음 직업이 하나도 정의되어 있지 않으면 제단을 놓지 않는다.
+    this.altar = jt && this.job.tier < jt && nextJobs(this.job).length ? { x: ALTAR.x, y: ALTAR.y, tier: jt, used: false } : null;
     this.nearAltar = false;
     this.p.x = W / 2;
     this.p.y = H / 2;
@@ -508,7 +505,7 @@ export class Game {
   }
 
   /** 보유 아이템으로 시너지를 다시 계산하고, 새로 발동한 것을 알린다. */
-  /** 시너지 계산용 목록: 보유 아이템 + 상위 직업 태그(가상의 아이템 1개로 센다) */
+  /** 시너지 계산용 목록: 보유 아이템 + 직업 태그(가상의 아이템 1개로 센다) */
   private synItems(extra?: string): string[] {
     const ids = [...this.itemCounts.keys()];
     if (extra) ids.push(extra);
@@ -683,14 +680,16 @@ export class Game {
     }
   }
 
-  /** 전직을 적용한다. 1차는 체력, 이동 속도, 무기, 스킬을 바꾸고 2차는 패시브와 태그를 더한다. */
+  /**
+   * 전직을 적용한다. 1차는 체력, 이동 속도, 모습을 정하고, 2/3차 각성은 체력을 더한다.
+   * 어느 단계든 skill, startWeapon이 있으면 바꾸고, apply로 수정치를, tag로 세트 태그를 더한다.
+   */
   pickJob(id: string) {
     if (this.phase !== 'job' || !this.altar) return;
     const j = charById(id);
     const p = this.p;
     this.job = j;
     if (j.tier === 1) {
-      this.line = j.id;
       this.baseHp = j.hp;
       this.baseSpeed = j.speed;
       this.sprite = j.sprite;
@@ -717,7 +716,7 @@ export class Game {
     this.phase = 'cleared';
     this.burst(p.x, p.y - 10, 40, j.color, 260, { size: 4, life: 0.8, grav: 60 });
     this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.5, r: 80, color: j.color });
-    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 10, t: 0, life: 2.4, big: true, text: `전직: ${j.name}`, color: j.color });
+    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 10, t: 0, life: 2.4, big: true, text: `${j.tier === 1 ? '전직' : '각성'}: ${j.name}`, color: j.color });
     this.shake = Math.max(this.shake, 6);
   }
 
@@ -761,7 +760,6 @@ export class Game {
     let v = this.m.dmg * (1 + this.gs.dmgPct);
     if (this.has('set:blood') && this.p.hp / this.p.maxHp < 0.4) v *= 1.3;
     if (this.p.rageT > 0) v *= 1.5;
-    if (this.line === 'berserker') v *= 1 + (1 - this.p.hp / this.p.maxHp);
     return v;
   }
 
@@ -788,7 +786,6 @@ export class Game {
     } else {
       const a = this.input.axis();
       p.moving = a.x !== 0 || a.y !== 0;
-      this.stillT = p.moving ? 0 : this.stillT + dt;
       const sp = this.baseSpeed * this.m.speed * Math.max(0.5, 1 + this.gs.speed) * (this.has('set:swift') ? 1.15 : 1);
       p.x += a.x * sp * dt;
       p.y += a.y * sp * dt;
@@ -797,7 +794,6 @@ export class Game {
     p.y = clamp(p.y, TOP + p.r, H - WALL - p.r);
 
     if (this.input.takeSkill() && p.skillId && p.skillCd <= 0) this.useSkill();
-    this.assassinT = Math.max(0, this.assassinT - dt);
 
     let rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1);
     if (this.has('set:swift') && p.moving) rate *= 1.2;
@@ -830,7 +826,6 @@ export class Game {
         p.dashY = useMove ? a.y : Math.sin(p.aim);
         p.dashT = 0.18;
         p.invuln = Math.max(p.invuln, 0.3);
-        if (this.job.id === 'assassin') this.assassinT = 1.5;
         break;
       }
       case 'nova': {
@@ -856,9 +851,7 @@ export class Game {
         p.slowT = 4;
         break;
       case 'turret':
-        this.turrets.push({ x: p.x, y: p.y, t: this.job.id === 'trapper' ? 12 : 8, cd: 0 });
-        // 덫사냥꾼은 2개, 나머지는 1개까지 유지(오래된 것부터 사라짐)
-        while (this.turrets.length > (this.job.id === 'trapper' ? 2 : 1)) this.turrets.shift();
+        this.turrets.push({ x: p.x, y: p.y, t: 8, cd: 0 });
         break;
       case 'rage':
         p.rageT = 5;
@@ -887,31 +880,21 @@ export class Game {
       const elem = this.elementColor();
       const step = bow ? 0.12 : 0.18;
       const speed = (bow ? 560 : 380) * (sharp ? 1.3 : 1);
-      const aimed = this.job.id === 'sniper' && this.stillT >= 0.4;
-      const pdmg = aimed ? dmg * 1.6 : dmg;
       for (let i = 0; i < count; i++) {
         const a = p.aim + (i - (count - 1) / 2) * step;
         this.projs.push({
           x: p.x + Math.cos(a) * 18, y: p.y - 6 + Math.sin(a) * 18,
           vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
-          r: bow ? 4 : 9, dmg: pdmg, life: bow ? 1.2 : 1.6, friendly: true,
-          pierce: m.pierce + (bow ? 0 : 2) + (sharp ? 1 : 0) + (aimed ? 2 : 0), bounce: m.bounce, hit: new Set(),
-          color: elem ?? (b.id === 'staff_green' ? '#7ee08a' : '#b49cff'), glow: aimed ? '#ffffff' : elem,
+          r: bow ? 4 : 9, dmg, life: bow ? 1.2 : 1.6, friendly: true,
+          pierce: m.pierce + (bow ? 0 : 2) + (sharp ? 1 : 0), bounce: m.bounce, hit: new Set(),
+          color: elem ?? (b.id === 'staff_green' ? '#7ee08a' : '#b49cff'), glow: elem,
           sprite: bow ? 'w_arrow' : undefined,
         });
       }
       return;
     }
 
-    const range = (b.range + m.extra * 16) * (this.has('set:shot') ? 1.2 : 1) * (this.job.id === 'swordmaster' ? 1.25 : 1);
-    if (this.job.id === 'swordmaster') {
-      // 검기: 다른 효과를 다시 일으키지 않는 관통 투사체
-      this.projs.push({
-        x: p.x + Math.cos(p.aim) * 20, y: p.y - 4 + Math.sin(p.aim) * 20,
-        vx: Math.cos(p.aim) * 520, vy: Math.sin(p.aim) * 520, r: 10, dmg: dmg * 0.6, life: 0.5, friendly: true,
-        pierce: 3, bounce: 0, hit: new Set(), color: '#bff4ff', glow: '#9fe6ff', proc: true,
-      });
-    }
+    const range = (b.range + m.extra * 16) * (this.has('set:shot') ? 1.2 : 1);
     const ax = Math.cos(p.aim);
     const ay = Math.sin(p.aim);
     for (const e of this.enemies) {
@@ -1211,12 +1194,7 @@ export class Game {
     if (e.dead) return;
     let d = base;
     let crit = false;
-    if (fromPlayer && this.job.id === 'chronomancer' && (this.p.slowT > 0 || e.frostT > 0)) d *= 1.4;
-    if (fromPlayer && !proc && this.assassinT > 0) {
-      d *= 2.5;
-      crit = true;
-      this.assassinT = 0;
-    } else if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= this.has('execute') ? 3 : 2; crit = true; }
+    if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= this.has('execute') ? 3 : 2; crit = true; }
     e.hp -= d;
     e.flash = 0.1;
     if (fromPlayer) {
@@ -1272,18 +1250,6 @@ export class Game {
     }
     if (!proc && this.m.split > 0) this.shards(e.x, e.y, 3 * this.m.split, this.weapon.dmg * 0.4 * this.dmgMul(), this.has('chain_blast'));
     if (this.has('set:blood')) this.heal(2);
-    if (this.job.id === 'paladin') this.heal(1);
-    if (this.job.id === 'bloodlord') this.heal(2);
-    if (this.job.id === 'venomancer' && e.poisonT > 0) {
-      // 독술사: 중독된 적이 터지며 주변에 독을 퍼뜨린다.
-      for (const o of this.enemies) {
-        if (o.dead || o === e || dist(o.x, o.y, e.x, e.y) > 90 + o.r) continue;
-        o.poisonStacks = Math.min(5, Math.max(o.poisonStacks, e.poisonStacks));
-        o.poisonT = Math.max(o.poisonT, 3);
-        this.hurtEnemy(o, 6 * this.m.dmg, true, true);
-      }
-      this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.3, r: 90, color: '#8ae06a' });
-    }
     if (this.has('set:element') && (e.burnT > 0 || e.poisonT > 0)) {
       // 원소술사: 상태이상이 주변으로 옮겨 붙는다.
       for (const o of this.enemies) {
@@ -1310,17 +1276,11 @@ export class Game {
       p.shieldT = 0;
       p.invuln = 0.6;
       this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.3, r: 34, color: '#7fd1ff' });
-      if (this.job.id === 'paladin') {
-        this.blast(p.x, p.y, 120, 40 * this.dmgMul());
-        this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.4, r: 120, color: '#ffe08a' });
-        this.heal(6);
-      }
       return;
     }
     // 방어: 방어 수치 a에 대해 a / (a + 15) 비율만큼 피해 감소
     const armor = this.gs.armor;
-    let taken = Math.max(1, dmg * (1 - armor / (armor + 15)));
-    if (this.job.id === 'undying' && p.rageT > 0) taken *= 0.6;
+    const taken = Math.max(1, dmg * (1 - armor / (armor + 15)));
     p.hp -= taken;
     p.invuln = 0.7;
     this.shake = Math.max(this.shake, 7);
@@ -1343,15 +1303,6 @@ export class Game {
       const a = Math.atan2(p.y - src.y, p.x - src.x);
       p.x += Math.cos(a) * 18;
       p.y += Math.sin(a) * 18;
-    }
-    if (p.hp <= 0 && this.job.id === 'undying' && !this.undyingUsed) {
-      // 불굴: 런마다 한 번 죽음을 버틴다.
-      this.undyingUsed = true;
-      p.hp = 1;
-      p.invuln = 2;
-      this.shake = 12;
-      this.fx.push({ kind: 'text', x: W / 2, y: H / 2, t: 0, life: 1.8, big: true, text: '불굴!', color: '#e0e0e0' });
-      this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.5, r: 90, color: '#ffffff' });
     }
     if (p.hp <= 0) {
       p.hp = 0;
@@ -1562,8 +1513,8 @@ export class Game {
       c.rect(0, 0, W, EXIT.y + 3);
       c.clip();
     }
-    if (this.job.tier === 2 && this.sink <= 0) {
-      // 상위 직업: 발밑에 직업 색 오라
+    if (this.job.tier >= 2 && this.sink <= 0) {
+      // 각성한 직업: 발밑에 직업 색 오라
       c.save();
       c.globalAlpha *= 0.35 + 0.15 * Math.sin(this.time * 4);
       c.strokeStyle = this.job.color;
@@ -1783,7 +1734,7 @@ export class Game {
   }
 
   /** 가까운 드랍 장비의 정보와 현재 장착 장비 비교 */
-  private renderAltar(c: CanvasRenderingContext2D, al: { x: number; y: number; tier: 1 | 2; used: boolean }) {
+  private renderAltar(c: CanvasRenderingContext2D, al: { x: number; y: number; tier: 1 | 2 | 3; used: boolean }) {
     const ready = this.phase === 'cleared' && !al.used;
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 3);
     const { x, y } = al;
@@ -1838,7 +1789,7 @@ export class Game {
       c.fillRect(x - 2, by - 6, 2, 5);
     }
     if (this.nearAltar && ready) {
-      const t = al.tier === 1 ? 'E 전직하기' : 'E 상위 전직';
+      const t = al.tier === 1 ? 'E 전직하기' : `E ${al.tier}차 각성`;
       c.textAlign = 'center';
       c.font = this.font(15);
       c.lineWidth = 4;
@@ -2181,12 +2132,12 @@ export class Game {
       c.font = this.font(17);
       c.lineWidth = 4;
       c.strokeStyle = 'rgba(0,0,0,0.8)';
-      const msg = this.room >= FINAL_ROOM
-        ? '사다리에 올라 던전을 탈출하세요'
-        : this.altar && !this.altar.used
-          ? '전직의 제단이 깨어났습니다! 제단 앞에서 E를 누르세요'
-          : this.chest && !this.chest.looted
-            ? '보물 상자의 잠금이 풀렸습니다! 상자 앞에서 E를 누르세요'
+      const msg = this.altar && !this.altar.used
+        ? '전직의 제단이 깨어났습니다! 제단 앞에서 E를 누르세요'
+        : this.chest && !this.chest.looted
+          ? '보물 상자의 잠금이 풀렸습니다! 상자 앞에서 E를 누르세요'
+          : this.room >= FINAL_ROOM
+            ? '사다리에 올라 던전을 탈출하세요'
             : '장비를 정리하고 위쪽 사다리로 이동하세요';
       c.strokeText(msg, W / 2, EXIT.y + 50);
       c.fillStyle = '#ffe9a0';
