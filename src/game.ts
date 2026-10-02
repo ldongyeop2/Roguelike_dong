@@ -43,6 +43,8 @@ const SWING_TIME: Record<WeaponKind, number> = {
   slash: 0.16, thrust: 0.14, smash: 0.24, bow: 0.18, staff: 0.2,
 };
 const EXIT = { x: W / 2, y: TOP + 18 }; // 방 클리어 후 나타나는 출구(사다리)
+const CHEST = { x: W / 2 + 190, y: TOP + 170 }; // 보물 방 상자 위치(사다리 가는 길을 막지 않게 오른쪽)
+const CHEST_OPEN_T = 0.45; // 상자 여는 연출 길이(초)
 
 interface Drop { x: number; y: number; gear: Gear; t: number }
 
@@ -158,6 +160,9 @@ export class Game {
   private gs = ZERO_STATS(); // 장착 장비 능력치 합계
   private drops: Drop[] = [];
   private near: Drop | null = null; // 플레이어 가까이 있는 드랍
+  /** 보물 방 상자. openT >= 0 이면 열리는 중이거나 열린 상태 */
+  private chest: { x: number; y: number; openT: number; looted: boolean } | null = null;
+  private nearChest = false;
   private pickedUids = new Set<number>();
   private parts: Particle[] = [];
   private shake = 0;
@@ -219,6 +224,8 @@ export class Game {
     this.turrets = [];
     this.drops = [];
     this.near = null;
+    this.chest = isRewardRoom(n) ? { x: CHEST.x, y: CHEST.y, openT: -1, looted: false } : null;
+    this.nearChest = false;
     this.p.x = W / 2;
     this.p.y = H / 2;
     this.bannerT = 1.6;
@@ -359,7 +366,8 @@ export class Game {
       this.refreshSynergies();
       this.itemsCollected++;
     }
-    this.startRoom(this.room + 1);
+    // 상자 보상을 고른 뒤에는 방에 남아 장비를 정리하고 사다리로 간다.
+    this.phase = 'cleared';
   }
 
   // ---------- 갱신 ----------
@@ -396,9 +404,12 @@ export class Game {
     if (this.phase === 'cleared') {
       this.updatePlayer(dt);
       this.updateProjs(dt, dt);
+      this.updateChest(dt);
+      if (this.phase !== 'cleared') return;
       this.updateDrops(dt);
-      // 출구(사다리)에 올라서면 다음 단계로
-      if (dist(this.p.x, this.p.y, EXIT.x, EXIT.y) < 24) {
+      // 출구(사다리)에 올라서면 다음 단계로. 열지 않은 상자가 있으면 사다리를 막는다.
+      const chestWaiting = this.chest && !this.chest.looted;
+      if (!chestWaiting && dist(this.p.x, this.p.y, EXIT.x, EXIT.y) < 24) {
         this.phase = 'exiting';
         this.exitT = 0;
         this.exitFrom = { x: this.p.x, y: this.p.y };
@@ -414,6 +425,7 @@ export class Game {
     this.updateEnemies(dt, dt * slow);
     this.updateProjs(dt, dt * slow);
     this.updateOrbit(dt);
+    this.updateChest(dt);
     this.updateDrops(dt);
     this.enemies = this.enemies.filter((e) => !e.dead);
 
@@ -454,9 +466,6 @@ export class Game {
       this.fade = 1;
       if (this.room >= FINAL_ROOM) {
         this.finish(true);
-      } else if (isRewardRoom(this.room)) {
-        this.phase = 'reward';
-        this.ev.onReward(this.rollCards(), this.room);
       } else {
         this.startRoom(this.room + 1);
       }
@@ -580,6 +589,40 @@ export class Game {
       y: clamp(y + rand(-12, 12), TOP + 20, H - WALL - 20),
       gear, t: rand(0, 3),
     });
+  }
+
+  /** 상자는 막힌 물체다. 방을 클리어하면 열 수 있고, 다 열리면 보상 카드를 띄운다. */
+  private updateChest(dt: number) {
+    const ch = this.chest;
+    this.nearChest = false;
+    if (!ch) return;
+    const p = this.p;
+    // 상자를 통과하지 못하게 밀어낸다.
+    const dx = p.x - ch.x;
+    const dy = p.y - ch.y;
+    const d = Math.hypot(dx, dy);
+    const minD = p.r + 18;
+    if (d < minD && d > 0.01) {
+      p.x = ch.x + (dx / d) * minD;
+      p.y = ch.y + (dy / d) * minD;
+    }
+    if (ch.openT >= 0) {
+      const before = ch.openT;
+      ch.openT += dt;
+      if (before < CHEST_OPEN_T && ch.openT >= CHEST_OPEN_T) {
+        ch.looted = true;
+        this.burst(ch.x, ch.y - 10, 26, '#ffd27a', 220, { size: 4, life: 0.7, grav: 120 });
+        this.phase = 'reward';
+        this.ev.onReward(this.rollCards(), this.room);
+      }
+      return;
+    }
+    if (this.phase !== 'cleared') return;
+    this.nearChest = d < minD + 26;
+    if (this.nearChest && this.input.takeInteract()) {
+      ch.openT = 0;
+      this.shake = Math.max(this.shake, 3);
+    }
   }
 
   private updateDrops(dt: number) {
@@ -1233,6 +1276,8 @@ export class Game {
       drawSprite(c, 'ladder', EXIT.x, EXIT.y, 3);
     }
 
+    if (this.chest) this.renderChest(c, this.chest);
+
     for (const d of this.drops) {
       const bob = Math.sin(d.t * 3) * 3;
       const col = RARITY[d.gear.rarity].color;
@@ -1502,6 +1547,10 @@ export class Game {
         colored.push({ x: d.x, y: d.y, r: 40, rgb, a: 0.3 });
       }
     }
+    if (this.chest) {
+      lights.push({ x: this.chest.x, y: this.chest.y, r: 90 });
+      if (!this.chest.looted) colored.push({ x: this.chest.x, y: this.chest.y, r: 70, rgb: [255, 200, 90], a: 0.25 });
+    }
     if (this.phase === 'cleared' || this.phase === 'exiting' || this.phase === 'reward') {
       lights.push({ x: EXIT.x, y: EXIT.y, r: 140 });
       colored.push({ x: EXIT.x, y: EXIT.y, r: 90, rgb: [255, 220, 130], a: 0.3 });
@@ -1562,6 +1611,57 @@ export class Game {
   }
 
   /** 가까운 드랍 장비의 정보와 현재 장착 장비 비교 */
+  private renderChest(c: CanvasRenderingContext2D, ch: { x: number; y: number; openT: number; looted: boolean }) {
+    const ready = this.phase === 'cleared' && ch.openT < 0;
+    c.fillStyle = 'rgba(0,0,0,0.4)';
+    c.beginPath();
+    c.ellipse(ch.x, ch.y + 22, 26, 7, 0, 0, Math.PI * 2);
+    c.fill();
+    if (ready) {
+      // 열 수 있게 되면 금빛으로 맥동한다.
+      const pulse = 0.5 + 0.5 * Math.sin(this.time * 5);
+      c.fillStyle = `rgba(255, 210, 122, ${0.18 + 0.2 * pulse})`;
+      c.beginPath();
+      c.arc(ch.x, ch.y, 34 + pulse * 4, 0, Math.PI * 2);
+      c.fill();
+    }
+    const lift = ready ? Math.abs(Math.sin(this.time * 5)) * -2 : 0;
+    if (ch.openT < 0) {
+      drawSprite(c, 'chest', ch.x, ch.y + lift, 3);
+      if (this.phase === 'playing') {
+        // 잠김 표시: 자물쇠
+        const lx = ch.x + 18;
+        const ly = ch.y + 10;
+        c.strokeStyle = '#000';
+        c.lineWidth = 6;
+        c.beginPath();
+        c.arc(lx, ly - 2, 6, Math.PI, 0);
+        c.stroke();
+        c.strokeStyle = '#c8c0b0';
+        c.lineWidth = 3;
+        c.stroke();
+        c.fillStyle = '#000';
+        c.fillRect(lx - 10, ly - 3, 20, 16);
+        c.fillStyle = '#9a9288';
+        c.fillRect(lx - 8, ly - 1, 16, 12);
+        c.fillStyle = '#2a2024';
+        c.fillRect(lx - 1, ly + 2, 2, 6);
+      }
+    } else {
+      const f = Math.min(2, Math.floor((ch.openT / CHEST_OPEN_T) * 3));
+      drawSprite(c, 'chest_full', ch.x, ch.y, 3, { frame: f });
+    }
+    if (this.nearChest && ready) {
+      c.textAlign = 'center';
+      c.font = this.font(15);
+      c.lineWidth = 4;
+      c.strokeStyle = 'rgba(0,0,0,0.85)';
+      c.strokeText('E 상자 열기', ch.x, ch.y - 34);
+      c.fillStyle = '#ffe9a0';
+      c.fillText('E 상자 열기', ch.x, ch.y - 34);
+    }
+  }
+
   private renderTooltip(c: CanvasRenderingContext2D) {
     const d = this.near;
     if (!d) return;
@@ -1824,8 +1924,8 @@ export class Game {
       c.strokeStyle = 'rgba(0,0,0,0.8)';
       const msg = this.room >= FINAL_ROOM
         ? '사다리에 올라 던전을 탈출하세요'
-        : isRewardRoom(this.room)
-          ? '보물 방 클리어! 사다리를 타면 보상을 고릅니다'
+        : this.chest && !this.chest.looted
+          ? '보물 상자의 잠금이 풀렸습니다! 상자 앞에서 E를 누르세요'
           : '장비를 정리하고 위쪽 사다리로 이동하세요';
       c.strokeText(msg, W / 2, EXIT.y + 50);
       c.fillStyle = '#ffe9a0';

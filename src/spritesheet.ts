@@ -69,6 +69,7 @@ export const S = {
   heart_half: tile(304, 368),
   coin: tile(288, 384, 8, 8),
   chest: tile(304, 400),
+  chest_full: { x: 304, y: 416, w: 16, h: 16, n: 3 }, // 보물이 든 상자 여는 3프레임
   // 타일
   wall: tile(32, 16),
   floor_1: tile(16, 64),
