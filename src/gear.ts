@@ -2,7 +2,6 @@
 // 장비 베이스는 해금 조건(unlock)을 가질 수 있고, 해금된 베이스만 드랍된다.
 import type { Unlock } from './content';
 import type { IconRef } from './sprites';
-import type { SpriteKey } from './spritesheet';
 
 export type Slot = 'weapon' | 'helmet' | 'armor' | 'boots' | 'accessory';
 export const SLOTS: Slot[] = ['weapon', 'helmet', 'armor', 'boots', 'accessory'];
@@ -13,8 +12,9 @@ export const SLOT_LABEL: Record<Slot, string> = {
 /**
  * slash: 부채꼴로 베기 / thrust: 앞으로 찌르기(좁고 김) / smash: 크게 내려치기(넓고 느림, 강한 넉백)
  * bow: 화살 발사 / staff: 마력구 발사(관통)
+ * fist: 주먹(건틀릿). 찌르기와 같은 좁은 범위, 매우 빠름 / whip: 채찍. 찌르기보다 길고 넓음, 느림
  */
-export type WeaponKind = 'slash' | 'thrust' | 'smash' | 'bow' | 'staff';
+export type WeaponKind = 'slash' | 'thrust' | 'smash' | 'bow' | 'staff' | 'fist' | 'whip';
 
 export interface GearStats {
   dmgPct?: number;
@@ -55,7 +55,7 @@ interface GearBaseCommon {
 
 export interface WeaponBase extends GearBaseCommon {
   slot: 'weapon';
-  sprite: SpriteKey;
+  sprite: IconRef;
   wkind: WeaponKind;
   dmg: number;
   cd: number;
@@ -71,7 +71,7 @@ export interface ArmorBase extends GearBaseCommon {
 export type GearBase = WeaponBase | ArmorBase;
 
 const wpn = (
-  id: string, name: string, sprite: SpriteKey, wkind: WeaponKind,
+  id: string, name: string, sprite: IconRef, wkind: WeaponKind,
   dmg: number, cd: number, range: number, arc: number, knock: number,
   extra: Partial<Pick<WeaponBase, 'stats' | 'unlock' | 'desc'>> = {},
 ): WeaponBase => ({
@@ -81,7 +81,7 @@ const wpn = (
 });
 
 export const WKIND_LABEL: Record<WeaponKind, string> = {
-  slash: '베기', thrust: '찌르기', smash: '내려치기', bow: '활', staff: '지팡이',
+  slash: '베기', thrust: '찌르기', smash: '내려치기', bow: '활', staff: '지팡이', fist: '주먹', whip: '채찍',
 };
 
 const arm = (
@@ -93,12 +93,16 @@ const arm = (
 
 export const WEAPONS: WeaponBase[] = [
   wpn('iron_sword', '철검', 'w_iron', 'slash', 20, 0.42, 78, 1.9, 220),
-  wpn('knight_sword', '기사의 검', 'w_knight', 'slash', 24, 0.48, 82, 1.9, 240),
+  wpn('knight_sword', '한손검', 'w_knight', 'slash', 24, 0.48, 82, 1.9, 240),
   wpn('saw_sword', '톱날검', 'w_serrated', 'slash', 21, 0.44, 80, 1.8, 200, { stats: { crit: 0.05 } }),
   wpn('dagger', '단검', 'w_dagger', 'slash', 12, 0.22, 60, 1.4, 120),
   wpn('hatchet', '손도끼', 'w_hatchet', 'slash', 17, 0.32, 66, 1.6, 200),
   wpn('cleaver', '도살칼', 'w_cleaver', 'slash', 23, 0.46, 70, 1.7, 220, { stats: { lifesteal: 0.01 } }),
   wpn('rapier', '레이피어', 'w_iron', 'thrust', 17, 0.28, 100, 0.55, 150),
+  // 건틀릿: 레이피어와 같은 범위(100px, 좁은 각)에 공격 간격 0.16초
+  wpn('gauntlet', '건틀릿', 'g_gauntlet', 'fist', 9, 0.16, 100, 0.55, 90),
+  // 채찍: 찌르기보다 길고(170px) 넓은 각, 공격 간격 0.8초
+  wpn('whip', '채찍', 'g_whip', 'whip', 30, 0.8, 170, 0.8, 160),
   wpn('spear', '창', 'w_spear', 'thrust', 22, 0.42, 120, 0.5, 260, { unlock: { stat: 'bestRoom', target: 4 } }),
   wpn('katana', '카타나', 'w_katana', 'slash', 20, 0.3, 92, 1.6, 160, { unlock: { stat: 'totalKills', target: 200 } }),
   wpn('mace', '철퇴', 'w_mace', 'smash', 28, 0.62, 78, 2.0, 380),

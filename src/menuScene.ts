@@ -2,7 +2,8 @@
 // 왼쪽은 메뉴 패널이 덮으므로 볼거리는 오른쪽에 모은다.
 import { charById } from './content';
 import { weaponById } from './gear';
-import { animFrame, drawSprite, spritesReady } from './sprites';
+import { animFrame, drawIcon, drawSprite, spritesReady } from './sprites';
+import { isGenKey } from './icons';
 import type { SpriteKey } from './spritesheet';
 
 const W = 960;
@@ -176,7 +177,8 @@ export class MenuScene {
     // 시작 무기가 옆에서 천천히 떠오른다
     const wb = weaponById(ch.startWeapon);
     const bob = Math.sin(this.t * 2.2) * 6;
-    drawSprite(c, wb.sprite, cx + 92, cy - 90 + bob, 3, { rot: 0.35 });
+    if (isGenKey(wb.sprite)) drawIcon(c, wb.sprite, cx + 92, cy - 90 + bob, 40);
+    else drawSprite(c, wb.sprite, cx + 92, cy - 90 + bob, 3, { rot: 0.35 });
 
     // 불씨
     c.globalCompositeOperation = 'lighter';

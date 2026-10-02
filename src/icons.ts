@@ -57,6 +57,16 @@ const SHAPES = {
     '......odo...', '.....odo....', '..oooddo....', '.oaabdo.....',
     'oaabaao.....', 'oaaaaco.....', '.oacco......', '..ooo.......',
   ],
+  gauntlet: [
+    '............', '..oooooo....', '.oabbaabo...', '.oabaabaoo..',
+    '.oaaaaaaabo.', '.oaaaaaaaao.', '.oaaaaaaaco.', '..oaaaaaco..',
+    '..oddddddo..', '..oaaaaaco..', '..occcccco..', '..oooooooo..',
+  ],
+  whip: [
+    '....oooo....', '...oaaaao...', '..oao..oao..', '..oa....ao..',
+    '..oao...oo..', '...oaoo.....', '....oaao....', '......oao...',
+    '.......odo..', '.......odo..', '.......odo..', '........o...',
+  ],
   amulet: [
     '.oo......oo.', '.oao....oao.', '..oao..oao..', '...oaooao...',
     '....oaao....', '....oddo....', '...odbddo...', '..odbddddo..',
@@ -82,6 +92,8 @@ const PAL: Record<string, Palette> = {
   frost: { o: '#0d2a3a', a: '#7fd8ff', b: '#e0f8ff', c: '#3a8ab0', d: '#ffffff' },
   split: { o: '#2a0a1a', a: '#d04a7a', b: '#ffc0d8', c: '#7a1a40', d: '#ffe08a' },
   venom: { o: '#0d240d', a: '#5ab84a', b: '#c8f0a0', c: '#2a6a20', d: '#9af07a' },
+  steel: { o: '#1d1f26', a: '#9aa4b4', b: '#e0e6ee', c: '#5b6372', d: '#8a5a33' },
+  hide: { o: '#2b1a12', a: '#8a5a33', b: '#c9a25a', c: '#5e3a20', d: '#3a2418' },
 };
 
 export const GEN = {
@@ -106,6 +118,8 @@ export const GEN = {
   g_gem_frost: ['gem', 'frost'],
   g_orb_split: ['orb', 'split'],
   g_stinger: ['stinger', 'venom'],
+  g_gauntlet: ['gauntlet', 'steel'],
+  g_whip: ['whip', 'hide'],
 } satisfies Record<string, [keyof typeof SHAPES, keyof typeof PAL]>;
 
 export type GenKey = keyof typeof GEN;

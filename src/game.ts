@@ -11,6 +11,7 @@ import { SETS, SYN_NAME, TAG_INFO, activeSynergies, tagCounts, type Tag } from '
 import type { RunResult } from './meta';
 import { FOUNTAIN_X, buildRoom, drawLighting, drawWallAnim, themeForRoom, type Light } from './room';
 import { animFrame, drawIcon, drawSprite, type IconRef } from './sprites';
+import { isGenKey } from './icons';
 import { S, type SpriteKey } from './spritesheet';
 import { boss3d, type BossPose } from './boss3d';
 import { angDiff, clamp, dist, rand, shuffle } from './util';
@@ -43,7 +44,7 @@ const DROP_CHANCE: Record<EnemyKind, number> = {
 };
 /** 무기 종류별 휘두르기 애니메이션 길이(초) */
 const SWING_TIME: Record<WeaponKind, number> = {
-  slash: 0.16, thrust: 0.14, smash: 0.24, bow: 0.18, staff: 0.2,
+  slash: 0.16, thrust: 0.14, smash: 0.24, bow: 0.18, staff: 0.2, fist: 0.1, whip: 0.32,
 };
 const EXIT = { x: W / 2, y: TOP + 18 }; // 방 클리어 후 나타나는 출구(사다리)
 const CHEST = { x: W / 2 + 190, y: TOP + 170 }; // 보물 방 상자 위치(사다리 가는 길을 막지 않게 오른쪽)
@@ -905,7 +906,7 @@ export class Game {
       e.kx += ax * b.knock;
       e.ky += ay * b.knock;
     }
-    if (b.wkind !== 'thrust') {
+    if (b.wkind === 'slash' || b.wkind === 'smash') {
       // 베기와 내려치기는 범위 안의 적 투사체를 쳐낸다.
       this.projs = this.projs.filter((q) => {
         if (q.friendly) return true;
@@ -1716,17 +1717,98 @@ export class Game {
       }
     } else if (b.wkind === 'thrust') {
       reach += swinging ? Math.sin(t * Math.PI) * 26 : 0;
+    } else if (b.wkind === 'fist') {
+      this.renderFist(c, swinging, t, hx, hy);
+      return;
+    } else if (b.wkind === 'whip') {
+      this.renderWhip(c, swinging, t, hx, hy);
+      return;
     } else {
       reach = 18 + (swinging ? -Math.sin(t * Math.PI) * 5 : 0);
     }
 
     const px = hx + Math.cos(ang) * reach;
     const py = hy + Math.sin(ang) * reach;
-    if (b.wkind === 'bow') {
+    if (isGenKey(b.sprite)) {
+      drawIcon(c, b.sprite, px, py, 20);
+    } else if (b.wkind === 'bow') {
       drawSprite(c, b.sprite, px, py, 1.7, { rot: ang });
     } else {
       drawSprite(c, b.sprite, px, py, 1.6, { anchor: 'feet', rot: ang + Math.PI / 2 });
     }
+  }
+
+  /** 건틀릿: 좌우 주먹을 번갈아 조준 방향으로 내지른다. */
+  private renderFist(c: CanvasRenderingContext2D, swinging: boolean, t: number, hx: number, hy: number) {
+    const p = this.p;
+    const a = swinging ? p.swingAim : p.aim;
+    const side = p.swingDir * 7; // 번갈아 나가는 손의 옆 간격
+    const nx = -Math.sin(a);
+    const ny = Math.cos(a);
+    const punch = swinging ? Math.sin(t * Math.PI) : 0;
+    const reach = 12 + punch * 30;
+    const x = hx + Math.cos(a) * reach + nx * side;
+    const y = hy + Math.sin(a) * reach + ny * side;
+    if (swinging && punch > 0.4) {
+      // 주먹 끝 충격선
+      const ec = this.elementColor();
+      c.strokeStyle = ec ?? 'rgba(255, 255, 255, 0.6)';
+      c.lineWidth = 2;
+      for (const k of [-1, 0, 1]) {
+        const ox = x + Math.cos(a) * 10 + nx * k * 6;
+        const oy = y + Math.sin(a) * 10 + ny * k * 6;
+        c.beginPath();
+        c.moveTo(ox, oy);
+        c.lineTo(ox + Math.cos(a) * 8 * punch, oy + Math.sin(a) * 8 * punch);
+        c.stroke();
+      }
+    }
+    // 반대 손은 몸 가까이 둔다.
+    drawIcon(c, this.weapon.base.sprite, hx + Math.cos(a) * 10 - nx * side, hy + Math.sin(a) * 10 - ny * side, 14);
+    drawIcon(c, this.weapon.base.sprite, x, y, 18);
+  }
+
+  /** 채찍: 손잡이에서 끝까지 물결치며 뻗었다가 돌아온다. */
+  private renderWhip(c: CanvasRenderingContext2D, swinging: boolean, t: number, hx: number, hy: number) {
+    const p = this.p;
+    const b = this.weapon.base;
+    const a = swinging ? p.swingAim : p.aim;
+    const hand = { x: hx + Math.cos(a) * 12, y: hy + Math.sin(a) * 12 };
+    if (!swinging) {
+      drawIcon(c, b.sprite, hand.x + Math.cos(a + 1.2) * 6, hand.y + Math.sin(a + 1.2) * 6, 18);
+      return;
+    }
+    const ext = Math.sin(Math.min(1, t * 1.25) * Math.PI); // 빠르게 뻗고 천천히 감긴다
+    const len = (b.range + this.m.extra * 16) * ext;
+    const nx = -Math.sin(a);
+    const ny = Math.cos(a);
+    const wave = Math.sin(t * Math.PI * 3) * 18 * (1 - t) * p.swingDir;
+    const pts: { x: number; y: number }[] = [];
+    for (let i = 0; i <= 12; i++) {
+      const k = i / 12;
+      const off = Math.sin(k * Math.PI) * wave;
+      pts.push({ x: hand.x + Math.cos(a) * len * k + nx * off, y: hand.y + Math.sin(a) * len * k + ny * off });
+    }
+    const ec = this.elementColor();
+    c.lineCap = 'round';
+    c.strokeStyle = '#1e120c';
+    c.lineWidth = 6;
+    c.beginPath();
+    pts.forEach((q, i) => (i ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y)));
+    c.stroke();
+    c.strokeStyle = ec ?? '#b07a4a';
+    c.lineWidth = 3.5;
+    c.stroke();
+    c.lineCap = 'butt';
+    const tip = pts[pts.length - 1];
+    if (ext > 0.85) {
+      // 끝에서 터지는 소리 표시
+      c.fillStyle = ec ?? '#fff1c8';
+      c.beginPath();
+      c.arc(tip.x, tip.y, 4 + (ext - 0.85) * 30, 0, Math.PI * 2);
+      c.fill();
+    }
+    drawIcon(c, b.sprite, hand.x, hand.y, 16);
   }
 
   private font(size: number, bold = false) {

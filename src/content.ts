@@ -139,7 +139,7 @@ export const CHARACTERS: CharDef[] = [
   // ---------- 1차 전직 (5번 방 보스 뒤) ----------
   {
     kind: 'char', tier: 1, id: 'warrior', sprite: 'knight_m', name: '전사', color: '#6fa8dc',
-    desc: '기사의 검과 방벽 스킬. 체력이 높아 정면에서 버팁니다.',
+    desc: '한손검과 방벽 스킬. 체력이 높아 정면에서 버팁니다.',
     hp: 130, speed: 190, startWeapon: 'knight_sword', skill: 'barrier',
   },
   {
@@ -161,14 +161,14 @@ export const CHARACTERS: CharDef[] = [
   },
   {
     kind: 'char', tier: 1, id: 'monk', sprite: 'dwarf_m', name: '수도승', color: '#e69138',
-    desc: '창과 분노. 빠르게 움직이며 길게 찌르고, 분노로 몰아칩니다.',
-    hp: 110, speed: 225, startWeapon: 'spear', skill: 'rage',
+    desc: '건틀릿과 분노. 좁은 범위를 아주 빠른 주먹으로 몰아칩니다.',
+    hp: 110, speed: 225, startWeapon: 'gauntlet', skill: 'rage',
     unlock: { stat: 'bossKills', target: 1 },
   },
   {
     kind: 'char', tier: 1, id: 'explorer', sprite: 'elf_f', name: '탐험가', color: '#f1c232',
-    desc: '손도끼와 포탑 설치. 도구를 활용해 싸웁니다.',
-    hp: 100, speed: 210, startWeapon: 'hatchet', skill: 'turret',
+    desc: '채찍과 포탑 설치. 느리지만 멀리까지 닿는 채찍으로 싸웁니다.',
+    hp: 100, speed: 210, startWeapon: 'whip', skill: 'turret',
     unlock: { stat: 'totalRooms', target: 30 },
   },
   // ---------- 2차 각성 (10번 방 보스 뒤): parent에 1차 직업 id ----------
