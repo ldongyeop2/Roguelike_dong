@@ -2,6 +2,7 @@ import './style.css';
 import { Game, type Card } from './game';
 import { Input } from './input';
 import { MenuScene } from './menuScene';
+import { boss3d } from './boss3d';
 import { applyRunResult, discover, loadSave, persist, resetSave, type RunResult } from './meta';
 import { UI } from './ui';
 
@@ -13,6 +14,7 @@ let save = loadSave();
 let game: Game | null = null;
 let last = performance.now();
 const scene = new MenuScene(canvas.getContext('2d')!);
+boss3d(); // 보스 3D 모델을 메뉴에 있는 동안 미리 불러온다.
 
 function menu() {
   game = null;
@@ -63,7 +65,10 @@ function startRun(charId: string) {
 }
 
 // 개발 모드에서만 자동 테스트용으로 현재 게임을 노출한다.
-if (import.meta.env.DEV) Object.defineProperty(window, '__game', { get: () => game });
+if (import.meta.env.DEV) {
+  Object.defineProperty(window, '__game', { get: () => game });
+  Object.defineProperty(window, '__boss3d', { get: () => boss3d() });
+}
 
 function frame(now: number) {
   const dt = (now - last) / 1000;

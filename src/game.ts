@@ -12,6 +12,7 @@ import type { RunResult } from './meta';
 import { FOUNTAIN_X, buildRoom, drawLighting, drawWallAnim, themeForRoom, type Light } from './room';
 import { animFrame, drawIcon, drawSprite, type IconRef } from './sprites';
 import { S, type SpriteKey } from './spritesheet';
+import { boss3d, type BossPose } from './boss3d';
 import { angDiff, clamp, dist, rand, shuffle } from './util';
 
 export const W = 960;
@@ -92,6 +93,8 @@ interface Enemy {
   tier: number; // 보스 단계
   pattern: number;
   spiralT: number;
+  act: number; // 보스가 공격할 때마다 늘어나는 번호(3D 공격 동작 재생용)
+  actKind: 'attack' | 'summon';
   dead: boolean;
 }
 
@@ -211,6 +214,7 @@ export class Game {
     this.p.skillId = this.char.skill;
     this.equip.weapon = makeGear(weaponById(this.char.startWeapon), 0, 1);
     this.recalc();
+    boss3d().reset();
     this.startRoom(1);
   }
 
@@ -279,7 +283,7 @@ export class Game {
   private makeEnemy(kind: EnemyKind, x: number, y: number, hpMul: number): Enemy {
     const base = {
       id: this.nextId++, x, y, kx: 0, ky: 0, spawnT: 0.9, cd: rand(0.6, 1.6), state: 0, st: 0,
-      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, dead: false,
+      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, act: 0, actKind: 'attack' as const, dead: false,
     };
     if (kind === 'boss') {
       const tier = Math.floor(this.room / BOSS_EVERY);
@@ -979,6 +983,10 @@ export class Game {
       if (e.cd <= 0 && e.spiralT <= 0) {
         e.cd = 2.2 - e.tier * 0.25;
         const choice = Math.floor(Math.random() * (e.tier >= 3 ? 4 : e.tier >= 2 ? 3 : 2));
+        if (choice !== 2 || e.tier < 2) {
+          e.act++;
+          e.actKind = choice === 2 ? 'summon' : 'attack';
+        }
         if (choice === 0) {
           const n = 10 + e.tier * 4;
           const off = rand(0, Math.PI);
@@ -1162,6 +1170,7 @@ export class Game {
       this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.35, r: 110, color: '#9ae07a' });
     }
     if (e.kind === 'boss') {
+      boss3d().die(this.bossPose(e));
       this.shake = 14;
       this.burst(e.x, e.y, 60, '#ffb35c', 320, { size: 4, life: 0.9, grav: 80 });
       this.bossKills++;
@@ -1320,6 +1329,8 @@ export class Game {
         c.arc(0, 0, e.r + 6, 0, Math.PI * 2);
         c.fill();
         c.restore();
+        // 3D 보스는 마법진 위로 땅에서 기어 나온다.
+        if (e.kind === 'boss') boss3d().draw(c, this.bossPose(e), this.time);
         continue;
       }
       const key = e.kind === 'boss' ? BOSS_SPRITE[e.tier] : ENEMY_SPRITE[e.kind];
@@ -1336,12 +1347,15 @@ export class Game {
         c.arc(e.x, e.y, e.r + 4, 0, Math.PI * 2);
         c.fill();
       }
-      drawSprite(c, key, e.x, feet, scale, {
-        anchor: 'feet',
-        frame: animFrame(key, this.time + e.id * 0.37, e.state !== 1),
-        flip: this.p.x < e.x,
-        flash: e.flash > 0 || e.state === 1,
-      });
+      const drawn3d = e.kind === 'boss' && boss3d().draw(c, this.bossPose(e), this.time);
+      if (!drawn3d) {
+        drawSprite(c, key, e.x, feet, scale, {
+          anchor: 'feet',
+          frame: animFrame(key, this.time + e.id * 0.37, e.state !== 1),
+          flip: this.p.x < e.x,
+          flash: e.flash > 0 || e.state === 1,
+        });
+      }
       if (e.kind !== 'boss' && e.hp < e.maxHp) {
         const top = feet - S[key].h * scale - 6;
         c.fillStyle = '#000a';
@@ -1350,6 +1364,8 @@ export class Game {
         c.fillRect(e.x - e.r, top, (e.r * 2 * Math.max(0, e.hp)) / e.maxHp, 3);
       }
     }
+
+    boss3d().drawCorpse(c, this.time);
 
     for (const q of this.projs) {
       if (q.glow) {
@@ -1660,6 +1676,15 @@ export class Game {
       c.fillStyle = '#ffe9a0';
       c.fillText('E 상자 열기', ch.x, ch.y - 34);
     }
+  }
+
+  private bossPose(e: Enemy): BossPose {
+    const dash = e.state === 2;
+    return {
+      x: e.x, y: e.y + e.r, r: e.r, tier: e.tier, spawnT: e.spawnT, state: e.state, spiralT: e.spiralT, flash: e.flash,
+      faceX: dash ? e.dx : this.p.x - e.x, faceY: dash ? e.dy : this.p.y - e.y,
+      act: e.act, actKind: e.actKind,
+    };
   }
 
   private renderTooltip(c: CanvasRenderingContext2D) {

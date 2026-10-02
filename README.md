@@ -8,10 +8,10 @@
 npm install
 npm run dev      # 개발 서버 (http://localhost:5173)
 npm run build    # 타입 검사 + 프로덕션 빌드 (dist/)
-npm run build:single  # 호스팅용 페이지 (dist/play.html + app.js + sprite-0.png)
+npm run build:single  # 호스팅용 페이지 (dist/play.html + app.js + sprite-0.png + models/*.json)
 ```
 
-`dist/play.html`은 CSS만 인라인한 작은 페이지이고, 게임 코드(`app.js`)와 스프라이트 시트(`sprite-0.png`)를 같은 폴더에서 상대 경로로 읽습니다. 호스팅 환경이 문서 골격을 씌워 주는 경우에 맞춰 `<html>`, `<head>`, `<body>` 태그가 없습니다. 브라우저에서 직접 실행할 때는 `npm run dev`나 `npm run preview`를 쓰세요.
+`dist/play.html`은 CSS만 인라인한 작은 페이지이고, 게임 코드(`app.js`), 스프라이트 시트(`sprite-0.png`), 보스 3D 모델(`models/boss1~3.json`, 데이터를 내장한 glTF)을 같은 폴더에서 상대 경로로 읽습니다. 호스팅 환경이 문서 골격을 씌워 주는 경우에 맞춰 `<html>`, `<head>`, `<body>` 태그가 없습니다. 브라우저에서 직접 실행할 때는 `npm run dev`나 `npm run preview`를 쓰세요.
 
 ## 조작
 
@@ -118,6 +118,8 @@ npm run build:single  # 호스팅용 페이지 (dist/play.html + app.js + sprite
 
 그래픽은 0x72(Robert)의 [16x16 DungeonTileset II](https://0x72.itch.io/dungeontileset-ii) v1.7 시트를 사용합니다(CC0, 출처 표기 의무 없음). 출처와 라이선스는 `src/assets/ASSET_LICENSE.md`에 정리했습니다. 스프라이트 좌표와 애니메이션 프레임 수는 `src/spritesheet.ts`에 있고, 콘텐츠의 `sprite` 값은 그 표의 키입니다. 이 시트에는 투구, 갑옷, 신발, 반지 그림이 없어서, 해당 아이콘은 `src/icons.ts`에 12x12 픽셀아트로 직접 그렸습니다.
 
+보스는 3D 모델로 그립니다. Kay Lousberg의 [KayKit Character Pack: Skeletons](https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0)(CC0)를 쓰며, 파수꾼은 도끼와 방패를 든 해골 전사, 군주는 쌍검 해골 도적, 심연의 왕은 지팡이를 든 해골 마법사입니다. 게임 로직은 2D 그대로이고, `src/boss3d.ts`가 Three.js로 보이지 않는 캔버스에 보스를 112px 해상도로 렌더링한 뒤 2D 화면의 보스 위치에 확대해 붙입니다. 그래서 투사체, 이펙트, 조명과의 앞뒤 순서가 다른 적과 같고, 도트 그림과 픽셀 크기가 비슷하게 맞습니다. 등장(땅에서 기어 나옴), 걷기, 공격, 소환, 돌진 준비와 돌진, 탄막 시전, 사망 동작이 게임 상태에 맞춰 재생되고, 피격 시 하얗게 번쩍입니다. WebGL을 쓸 수 없거나 모델을 아직 불러오지 못했으면 기존 2D 보스 그림으로 그립니다. 모델 파일은 `scripts/pack-boss-models.mjs`로 원본에서 다시 만들 수 있습니다.
+
 ## 코드 구조
 
 | 파일 | 역할 |
@@ -129,6 +131,7 @@ npm run build:single  # 호스팅용 페이지 (dist/play.html + app.js + sprite
 | `src/meta.ts` | 저장(localStorage), 누적 통계, 해금 판정 |
 | `src/game.ts` | 런 시뮬레이션: 플레이어, 적, 투사체, 보스, 보상 생성, 렌더링 |
 | `src/ui.ts` | 메뉴, 해금 도감, 보상 선택, 결과 화면 (DOM 오버레이) |
+| `src/boss3d.ts` | 보스 3D 모델 로드, 애니메이션 선택, 2D 화면 합성 |
 | `src/spritesheet.ts` | 스프라이트 좌표표 |
 | `src/sprites.ts` | 스프라이트 시트 로드, 그리기, 애니메이션, 배경 타일 |
 | `src/input.ts` | 키보드/마우스 입력 |
