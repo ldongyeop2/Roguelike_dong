@@ -21,6 +21,10 @@ const WALL = 28;
 export const TOP = 84;
 const FINAL_ROOM = 15;
 const BOSS_EVERY = 5;
+/** 보상 카드를 고르는 방: 각 층의 3번째 방과 보스 방(3, 5, 8, 10, 13) */
+const isRewardRoom = (n: number) => n % BOSS_EVERY === 0 || n % BOSS_EVERY === 3;
+/** 일반 방 클리어 시 장비가 나올 확률 (보스 방은 보장) */
+const CLEAR_DROP_CHANCE = 0.3;
 
 type EnemyKind = 'grunt' | 'archer' | 'charger' | 'swarm' | 'brute' | 'boss';
 
@@ -32,7 +36,7 @@ const BOSS_NAME = ['', '파수꾼', '군주', '심연의 왕'];
 
 /** 처치 시 장비 드랍 확률 */
 const DROP_CHANCE: Record<EnemyKind, number> = {
-  grunt: 0.1, archer: 0.1, swarm: 0.04, charger: 0.14, brute: 0.3, boss: 1,
+  grunt: 0.04, archer: 0.04, swarm: 0.015, charger: 0.06, brute: 0.15, boss: 1,
 };
 /** 무기 종류별 휘두르기 애니메이션 길이(초) */
 const SWING_TIME: Record<WeaponKind, number> = {
@@ -287,10 +291,11 @@ export class Game {
   private roomCleared() {
     this.phase = 'cleared';
     this.roomsCleared++;
-    this.heal(this.p.maxHp * 0.08);
+    this.heal(this.p.maxHp * 0.12);
     this.projs = this.projs.filter((q) => q.friendly);
-    // 방마다 장비 하나는 보장한다.
-    this.spawnDrop(W / 2, H / 2 + 40, this.room % BOSS_EVERY === 0 ? 2 : 0);
+    // 보스 방은 장비를 보장하고, 일반 방은 가끔만 상자에서 장비가 나온다.
+    const boss = this.room % BOSS_EVERY === 0;
+    if (boss || Math.random() < CLEAR_DROP_CHANCE) this.spawnDrop(W / 2, H / 2 + 40, boss ? 2 : 0);
     this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 40, t: 0, life: 1.8, text: 'ROOM CLEAR', color: '#ffd27a', big: true });
   }
 
@@ -449,9 +454,11 @@ export class Game {
       this.fade = 1;
       if (this.room >= FINAL_ROOM) {
         this.finish(true);
-      } else {
+      } else if (isRewardRoom(this.room)) {
         this.phase = 'reward';
         this.ev.onReward(this.rollCards(), this.room);
+      } else {
+        this.startRoom(this.room + 1);
       }
     }
   }
@@ -1731,9 +1738,14 @@ export class Game {
         c.stroke();
       } else {
         c.fillRect(x, y, 10, 10);
-        c.strokeStyle = '#000';
+        c.strokeStyle = isRewardRoom(i) ? '#e8b84a' : '#000';
         c.lineWidth = 1;
         c.strokeRect(x + 0.5, y + 0.5, 9, 9);
+        if (isRewardRoom(i)) {
+          // 보상 방 표시: 가운데 작은 보석
+          c.fillStyle = done ? '#7a4a12' : '#e8b84a';
+          c.fillRect(x + 3, y + 3, 4, 4);
+        }
       }
     }
 
@@ -1810,7 +1822,11 @@ export class Game {
       c.font = this.font(17);
       c.lineWidth = 4;
       c.strokeStyle = 'rgba(0,0,0,0.8)';
-      const msg = this.room >= FINAL_ROOM ? '사다리에 올라 던전을 탈출하세요' : '장비를 정리하고 위쪽 사다리로 이동하세요';
+      const msg = this.room >= FINAL_ROOM
+        ? '사다리에 올라 던전을 탈출하세요'
+        : isRewardRoom(this.room)
+          ? '보물 방 클리어! 사다리를 타면 보상을 고릅니다'
+          : '장비를 정리하고 위쪽 사다리로 이동하세요';
       c.strokeText(msg, W / 2, EXIT.y + 50);
       c.fillStyle = '#ffe9a0';
       c.fillText(msg, W / 2, EXIT.y + 50);
