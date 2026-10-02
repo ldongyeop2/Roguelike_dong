@@ -181,6 +181,17 @@ export function rollRarity(room: number, minRarity = 0): number {
   return Math.max(v, minRarity);
 }
 
+/** 시작 무기 뽑기 확률: 일반 70%, 고급 22%, 희귀 7%, 전설 1% */
+export const START_ODDS = [0.7, 0.22, 0.07, 0.01];
+export function rollStartRarity(): number {
+  let r = Math.random();
+  for (let i = 0; i < START_ODDS.length; i++) {
+    if (r < START_ODDS[i]) return i;
+    r -= START_ODDS[i];
+  }
+  return 0;
+}
+
 export function makeGear(base: GearBase, rarity: number, room: number): Gear {
   const rar = RARITY[rarity];
   const scale = 1 + (room - 1) * 0.04;

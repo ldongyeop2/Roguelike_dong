@@ -133,7 +133,7 @@ export type AnyDef = CharDef | ItemDef | SkillDef | GearBase;
 export const CHARACTERS: CharDef[] = [
   {
     kind: 'char', tier: 0, id: 'adventurer', sprite: 'elf_m', name: '모험가', color: '#a8a8a8',
-    desc: '아무 특성 없는 견습 모험가. 철검 하나만 들고 시작하며 스킬이 없습니다. 보스를 쓰러뜨릴 때마다 전직과 각성으로 특성을 키웁니다.',
+    desc: '아무 특성 없는 견습 모험가. 출정할 때 뽑은 무기 하나만 들고 시작하며 스킬이 없습니다. 보스를 쓰러뜨릴 때마다 전직과 각성으로 특성을 키웁니다.',
     hp: 100, speed: 200, startWeapon: 'iron_sword', skill: '',
   },
   // ---------- 1차 전직 (5번 방 보스 뒤) ----------

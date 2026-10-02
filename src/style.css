@@ -166,3 +166,40 @@ kbd { font-family: var(--font-pixel); font-size: 8px; color: var(--text); backgr
 .hero-row .nm .ds { font-family: var(--font-body); font-size: 11px; }
 .rewards .card.job { width: 230px; }
 .rewards .card.job:hover { border-color: var(--c); box-shadow: 0 0 16px color-mix(in srgb, var(--c) 45%, transparent); }
+
+/* 시작 무기 뽑기 */
+.gacha { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; position: relative; }
+.reel {
+  position: relative; width: min(680px, 100%); height: 132px; overflow: hidden; cursor: pointer;
+  background: #0d090c; border: 2px solid var(--edge); box-shadow: inset 0 0 30px #000;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+.strip { display: flex; gap: 8px; padding: 14px 0; will-change: transform; }
+.slot {
+  flex: none; width: 96px; height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  background: var(--card); border: 2px solid color-mix(in srgb, var(--c) 55%, #000); box-shadow: inset 0 -12px 18px color-mix(in srgb, var(--c) 18%, transparent);
+}
+.slot small { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.slot.hot { border-color: var(--c); background: var(--card-hi); }
+.slot.won { border-color: var(--c); background: color-mix(in srgb, var(--c) 22%, var(--card)); box-shadow: 0 0 22px var(--c); animation: won-pop 0.5s ease-out; }
+.slot.won small { color: var(--text); }
+@keyframes won-pop { 0% { transform: scale(1); } 40% { transform: scale(1.18); } 100% { transform: scale(1.08); } }
+.marker { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--gold); box-shadow: 0 0 10px var(--gold); pointer-events: none; }
+.marker::before, .marker::after { content: ''; position: absolute; left: -7px; border: 8px solid transparent; }
+.marker::before { top: 0; border-top-color: var(--gold); }
+.marker::after { bottom: 0; border-bottom-color: var(--gold); }
+.reveal { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 28px; min-width: 320px;
+  background: var(--panel-solid); border: 2px solid var(--c); box-shadow: 0 0 24px color-mix(in srgb, var(--c) 45%, transparent); animation: reveal-in 0.35s ease-out; overflow: hidden; }
+.reveal[hidden] { display: none; }
+.reveal .rname { font-family: var(--font-head); font-size: 22px; color: var(--c); letter-spacing: 2px; text-shadow: 0 0 12px var(--c); }
+.reveal .name { font-family: var(--font-head); font-size: 26px; display: flex; align-items: center; gap: 10px; }
+.reveal > *:not(.rays) { position: relative; }
+@keyframes reveal-in { from { transform: translateY(10px) scale(0.95); opacity: 0; } to { transform: none; opacity: 1; } }
+.rays { position: absolute; inset: -150%; background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--c) 30%, transparent) 0deg 10deg, transparent 10deg 24deg); animation: rays-spin 8s linear infinite; }
+@keyframes rays-spin { to { transform: rotate(360deg); } }
+.gacha.r2 h1, .gacha.r3 h1 { color: var(--c); text-shadow: 0 0 16px var(--c); }
+.gacha-screen:has(.gacha.r3) { animation: legend-flash 0.9s ease-out; }
+@keyframes legend-flash { 0% { background: rgba(255, 190, 90, 0.75); } 100% { background: rgba(13, 9, 12, 0.78); } }
+.screen.gacha-screen { background: rgba(13, 9, 12, 0.9); }
+.reveal .sub { text-shadow: 0 1px 2px #000, 0 0 6px #000; }

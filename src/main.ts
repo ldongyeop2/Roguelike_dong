@@ -3,7 +3,8 @@ import { Game, type Card } from './game';
 import { Input } from './input';
 import { MenuScene } from './menuScene';
 import { boss3d } from './boss3d';
-import { applyRunResult, discover, loadSave, persist, resetSave, type RunResult } from './meta';
+import { applyRunResult, discover, isUnlocked, loadSave, persist, resetSave, type RunResult } from './meta';
+import { WEAPONS, makeGear, rollStartRarity, type Gear } from './gear';
 import { UI } from './ui';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -27,9 +28,16 @@ function menu() {
   });
 }
 
+/** 출정: 해금된 무기 중 하나를 등급과 함께 뽑는 연출을 보여 준 뒤 그 무기로 런을 시작한다. */
 function startRun(charId: string) {
   save.lastChar = charId;
   persist(save);
+  const pool = WEAPONS.filter((w) => isUnlocked(save, w.id));
+  const weapon = makeGear(pool[Math.floor(Math.random() * pool.length)], rollStartRarity(), 1);
+  ui.showGacha(pool, weapon, () => beginRun(charId, weapon));
+}
+
+function beginRun(charId: string, weapon: Gear) {
   ui.hide();
   game = new Game(canvas, input, charId, save.unlocked, {
     onReward: (cards: Card[], room: number) => ui.showReward(cards, room, (c) => {
@@ -64,7 +72,7 @@ function startRun(charId: string) {
         },
       );
     },
-  });
+  }, weapon);
 }
 
 // 개발 모드에서만 자동 테스트용으로 현재 게임을 노출한다.

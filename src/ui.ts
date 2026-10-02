@@ -6,7 +6,7 @@ import type { Card } from './game';
 import { paintGenIcons } from './icons';
 import { iconHtml, type IconRef } from './sprites';
 import { PAIRS, SETS, SET_NEED, SYN_NAME, TAG_INFO, type SetBonus, type Tag } from './synergy';
-import { ARMORS, RARITY, SLOT_LABEL, WEAPONS, gearLines, gearTitle, weaponById, type Gear, type Slot } from './gear';
+import { ARMORS, RARITY, SLOT_LABEL, START_ODDS, WEAPONS, gearLines, gearTitle, weaponById, type Gear, type Slot, type WeaponBase } from './gear';
 
 const icon = (key: IconRef, px = 32) => `<span class="icon">${iconHtml(key, px)}</span>`;
 
@@ -117,7 +117,6 @@ export class UI {
 
   private heroCard(): string {
     const c = charById('adventurer');
-    const w = weaponById(c.startWeapon);
     return `
       <section class="hero-card">
         <div class="title"><b>${c.name}</b><span>READY</span></div>
@@ -125,7 +124,7 @@ export class UI {
         <div class="chips">
           <span class="chip">체력 <b>${c.hp}</b></span>
           <span class="chip">이동 <b>${c.speed}</b></span>
-          <span class="chip">무기 <b>${w.name}</b></span>
+          <span class="chip">무기 <b>출정 시 뽑기</b></span>
           <span class="chip">스킬 <b>없음</b></span>
         </div>
         <button id="start" class="primary">던전으로 출정</button>
@@ -171,6 +170,82 @@ export class UI {
       'screen dim');
     el.querySelectorAll<HTMLElement>('[data-i]').forEach((b) =>
       b.addEventListener('click', () => onPick(cards[Number(b.dataset.i)])));
+  }
+
+  /**
+   * 시작 무기 뽑기: 무기 릴이 돌다가 결과에서 멈추고, 등급에 맞는 연출과 함께 결과를 보여 준다.
+   * 화면을 누르거나 건너뛰기를 누르면 바로 멈춘다.
+   */
+  showGacha(pool: WeaponBase[], result: Gear, onDone: () => void) {
+    const N = 44; // 릴에 놓을 칸 수
+    const WIN = 38; // 결과가 놓이는 칸
+    const pick = () => pool[Math.floor(Math.random() * pool.length)];
+    // 미끼 칸은 등급 색만 무작위로 칠해 기대감을 준다.
+    const fakeRarity = () => { const r = Math.random(); return r < 0.55 ? 0 : r < 0.82 ? 1 : r < 0.96 ? 2 : 3; };
+    const slots = Array.from({ length: N }, (_, i) => (i === WIN ? { b: result.base, r: result.rarity } : { b: pick(), r: fakeRarity() }));
+    const odds = START_ODDS.map((p, i) => `<span style="color:${RARITY[i].color}">${RARITY[i].name} ${Math.round(p * 100)}%</span>`).join(' · ');
+    const el = this.mount(`
+      <div class="gacha">
+        <h1>첫 무기 뽑기</h1>
+        <div class="sub">모험가가 들고 갈 무기를 뽑습니다. ${odds}</div>
+        <div class="reel"><div class="strip">${slots.map((s, i) =>
+          `<div class="slot" data-i="${i}" style="--c:${RARITY[s.r].color}">${icon(s.b.sprite, 48)}<small>${s.b.name}</small></div>`).join('')}</div>
+          <div class="marker"></div></div>
+        <div class="reveal" hidden></div>
+        <div class="row"><button id="skip" class="small">건너뛰기</button></div>
+      </div>`, 'screen dim gacha-screen');
+    const reel = el.querySelector<HTMLElement>('.reel')!;
+    const strip = el.querySelector<HTMLElement>('.strip')!;
+    const slotEls = [...strip.children] as HTMLElement[];
+    const step = slotEls[1].offsetLeft - slotEls[0].offsetLeft;
+    const w = slotEls[0].offsetWidth;
+    // 결과 칸 안에서 멈추는 위치를 조금씩 흔들어 매번 다르게 보이게 한다.
+    const target = -(WIN * step + w / 2 - reel.clientWidth / 2 + (Math.random() - 0.5) * w * 0.6);
+    let done = false;
+    let raf = 0;
+    let hot = -1;
+    const tick = () => {
+      // 표시선 아래 칸을 밝혀 돌아가는 느낌을 준다.
+      const x = new DOMMatrix(getComputedStyle(strip).transform).m41;
+      const i = Math.round((reel.clientWidth / 2 - x - w / 2) / step);
+      if (i !== hot) {
+        slotEls[hot]?.classList.remove('hot');
+        slotEls[i]?.classList.add('hot');
+        hot = i;
+      }
+      if (!done) raf = requestAnimationFrame(tick);
+    };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(raf);
+      strip.style.transition = 'none';
+      strip.style.transform = `translateX(${target}px)`;
+      slotEls.forEach((s) => s.classList.remove('hot'));
+      slotEls[WIN].classList.add('won');
+      const rar = RARITY[result.rarity];
+      el.querySelector('.gacha')!.classList.add(`r${result.rarity}`);
+      el.style.setProperty('--c', rar.color);
+      const rv = el.querySelector<HTMLElement>('.reveal')!;
+      rv.hidden = false;
+      rv.innerHTML = `
+        ${result.rarity >= 2 ? '<div class="rays"></div>' : ''}
+        <div class="rname">${rar.name}${result.rarity === 3 ? '!!' : result.rarity === 2 ? '!' : ''}</div>
+        <div class="name">${icon(result.base.sprite, 48)}<span>${result.base.name}</span></div>
+        <div class="sub">${gearLines(result).join(' · ')}</div>
+        <button id="go" class="primary">이 무기로 출정</button>`;
+      paintGenIcons(rv);
+      el.querySelector('#skip')?.remove();
+      el.querySelector('#go')!.addEventListener('click', onDone);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      strip.style.transition = 'transform 4.2s cubic-bezier(0.08, 0.7, 0.12, 1)';
+      strip.style.transform = `translateX(${target}px)`;
+      raf = requestAnimationFrame(tick);
+    }));
+    strip.addEventListener('transitionend', finish);
+    el.querySelector('#skip')!.addEventListener('click', finish);
+    reel.addEventListener('click', finish);
   }
 
   /** 전직 선택. 잠긴 직업은 해금 조건만 보여 주고 고를 수 없다. */

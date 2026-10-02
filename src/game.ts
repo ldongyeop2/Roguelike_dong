@@ -218,6 +218,7 @@ export class Game {
     charId: string,
     unlockedIds: string[],
     private ev: GameEvents,
+    startWeapon?: Gear, // 시작 무기 뽑기 결과. 없으면 직업 기본 무기
   ) {
     this.ctx = canvas.getContext('2d')!;
     this.job = charById(charId);
@@ -226,7 +227,7 @@ export class Game {
     this.sprite = this.job.sprite;
     this.unlocked = new Set(unlockedIds);
     this.p.skillId = this.job.skill;
-    this.equip.weapon = makeGear(weaponById(this.job.startWeapon), 0, 1);
+    this.equip.weapon = startWeapon ?? makeGear(weaponById(this.job.startWeapon), 0, 1);
     this.recalc();
     boss3d().reset();
     this.startRoom(1);
