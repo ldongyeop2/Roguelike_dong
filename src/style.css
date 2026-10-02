@@ -160,3 +160,9 @@ kbd { font-family: var(--font-pixel); font-size: 8px; color: var(--text); backgr
 .sets { display: flex; flex-wrap: wrap; gap: 6px; }
 .set-chip { font-size: 12px; padding: 3px 8px; border: 1px solid var(--edge); color: var(--muted); background: #120d10; }
 .set-chip.on { border-color: var(--c); color: var(--c); box-shadow: 0 0 10px color-mix(in srgb, var(--c) 40%, transparent); }
+.branches { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; font-family: var(--font-head); font-size: 13px; }
+.branch.locked { color: var(--faint); }
+.branch small { font-family: var(--font-body); font-size: 10px; }
+.hero-row .nm .ds { font-family: var(--font-body); font-size: 11px; }
+.rewards .card.job { width: 230px; }
+.rewards .card.job:hover { border-color: var(--c); box-shadow: 0 0 16px color-mix(in srgb, var(--c) 45%, transparent); }

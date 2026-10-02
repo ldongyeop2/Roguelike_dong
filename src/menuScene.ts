@@ -23,7 +23,7 @@ export class MenuScene {
   private walkers: Walker[] = [];
   private embers: Ember[] = [];
   private bg: HTMLCanvasElement | null = null;
-  charId = 'knight';
+  charId = 'adventurer';
 
   constructor(private ctx: CanvasRenderingContext2D) {
     for (let i = 0; i < 5; i++) {
@@ -172,7 +172,7 @@ export class MenuScene {
     c.beginPath();
     c.ellipse(cx, cy, 30, 8, 0, 0, Math.PI * 2);
     c.fill();
-    drawSprite(c, ch.sprite, cx, cy, 6, { anchor: 'feet', frame: animFrame(ch.sprite, this.t, false, 6) });
+    drawSprite(c, ch.sprite, cx, cy, 6, { anchor: 'feet', frame: animFrame(ch.sprite, this.t, false, 6), gray: ch.tier === 0 });
     // 시작 무기가 옆에서 천천히 떠오른다
     const wb = weaponById(ch.startWeapon);
     const bob = Math.sin(this.t * 2.2) * 6;

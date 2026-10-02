@@ -20,7 +20,6 @@ function menu() {
   game = null;
   ui.showMenu(save, {
     onStart: startRun,
-    onSelect: (id) => { scene.charId = id; },
     onReset: () => {
       save = resetSave();
       menu();
@@ -38,6 +37,10 @@ function startRun(charId: string) {
       game?.pickReward(c);
     }),
     onSynergy: (id) => { discover(save, id); },
+    onJob: (tier, ids) => ui.showJob(save, tier, ids, (id) => {
+      ui.hide();
+      game?.pickJob(id);
+    }),
     onEnd: (r: RunResult) => {
       const newly = applyRunResult(save, r);
       ui.showEnd(r, newly, save, menu);

@@ -1,5 +1,5 @@
 import {
-  ITEMS, SKILLS, baseMods, charById, itemById, skillById,
+  ITEMS, SKILLS, baseMods, charById, itemById, nextJobs, skillById,
   type CharDef, type Mods,
 } from './content';
 import {
@@ -26,6 +26,8 @@ const BOSS_EVERY = 5;
 const isRewardRoom = (n: number) => n % BOSS_EVERY === 0 || n % BOSS_EVERY === 3;
 /** 일반 방 클리어 시 장비가 나올 확률 (보스 방은 보장) */
 const CLEAR_DROP_CHANCE = 0.3;
+/** 전직 제단이 나오는 방과 그때 고르는 전직 단계 */
+const JOB_ROOMS: Record<number, 1 | 2> = { 2: 1, 5: 2 };
 
 type EnemyKind = 'grunt' | 'archer' | 'charger' | 'swarm' | 'brute' | 'boss';
 
@@ -46,6 +48,7 @@ const SWING_TIME: Record<WeaponKind, number> = {
 const EXIT = { x: W / 2, y: TOP + 18 }; // 방 클리어 후 나타나는 출구(사다리)
 const CHEST = { x: W / 2 + 190, y: TOP + 170 }; // 보물 방 상자 위치(사다리 가는 길을 막지 않게 오른쪽)
 const CHEST_OPEN_T = 0.45; // 상자 여는 연출 길이(초)
+const ALTAR = { x: W / 2 - 190, y: TOP + 170 }; // 전직 제단 위치(상자 반대편)
 
 interface Drop { x: number; y: number; gear: Gear; t: number }
 
@@ -135,9 +138,11 @@ export interface GameEvents {
   onEnd(result: RunResult): void;
   onPause(paused: boolean): void;
   onSynergy(id: string): void;
+  /** 전직 제단을 썼을 때: 고를 수 있는 다음 직업 후보(잠긴 것 포함) */
+  onJob(tier: number, ids: string[]): void;
 }
 
-type Phase = 'playing' | 'cleared' | 'exiting' | 'reward' | 'ended';
+type Phase = 'playing' | 'cleared' | 'exiting' | 'reward' | 'job' | 'ended';
 
 /** 출구 연출 시간(초): 점프 → 구멍으로 하강 → 암전 */
 const HOP_T = 0.38;
@@ -147,7 +152,16 @@ const ENTER_T = 0.5; // 새 방에 떨어져 내려오는 시간
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
-  private char: CharDef;
+  private job: CharDef; // 현재 직업
+  private line = ''; // 1차 직업 id(상위 직업도 같은 계열로 본다)
+  private baseHp = 100;
+  private baseSpeed = 200;
+  private sprite: SpriteKey = 'elf_m';
+  private altar: { x: number; y: number; tier: 1 | 2; used: boolean } | null = null;
+  private nearAltar = false;
+  private stillT = 0; // 저격수: 멈춰 있던 시간
+  private assassinT = 0; // 암살자: 대시 후 확정 치명타 시간
+  private undyingUsed = false;
   private m: Mods = baseMods();
   private unlocked: Set<string>;
 
@@ -209,10 +223,13 @@ export class Game {
     private ev: GameEvents,
   ) {
     this.ctx = canvas.getContext('2d')!;
-    this.char = charById(charId);
+    this.job = charById(charId);
+    this.baseHp = this.job.hp;
+    this.baseSpeed = this.job.speed;
+    this.sprite = this.job.sprite;
     this.unlocked = new Set(unlockedIds);
-    this.p.skillId = this.char.skill;
-    this.equip.weapon = makeGear(weaponById(this.char.startWeapon), 0, 1);
+    this.p.skillId = this.job.skill;
+    this.equip.weapon = makeGear(weaponById(this.job.startWeapon), 0, 1);
     this.recalc();
     boss3d().reset();
     this.startRoom(1);
@@ -230,6 +247,9 @@ export class Game {
     this.near = null;
     this.chest = isRewardRoom(n) ? { x: CHEST.x, y: CHEST.y, openT: -1, looted: false } : null;
     this.nearChest = false;
+    const jt = JOB_ROOMS[n];
+    this.altar = jt && this.job.tier < jt ? { x: ALTAR.x, y: ALTAR.y, tier: jt, used: false } : null;
+    this.nearAltar = false;
     this.p.x = W / 2;
     this.p.y = H / 2;
     this.bannerT = 1.6;
@@ -317,7 +337,7 @@ export class Game {
 
   private result(won: boolean): RunResult {
     return {
-      won, char: this.char.id, room: this.room, kills: this.kills, bossKills: this.bossKills,
+      won, char: this.job.id, room: this.room, kills: this.kills, bossKills: this.bossKills,
       roomsCleared: this.roomsCleared, itemsCollected: this.itemsCollected,
     };
   }
@@ -344,7 +364,7 @@ export class Game {
         cards.push({ kind: 'skill', id: s.id, sprite: s.sprite, name: `[스킬] ${s.name}`, desc: `${s.desc} (쿨타임 ${s.cd}초, 현재 스킬 교체)` });
       } else {
         const i = items.pop()!;
-        const next = activeSynergies([...this.itemCounts.keys(), i.id], (id) => itemById(id).tags);
+        const next = activeSynergies(this.synItems(i.id), this.tagsOf);
         const gained = [...next].filter((x) => !this.syn.has(x)).map((x) => SYN_NAME.get(x));
         cards.push({
           kind: 'item', id: i.id, sprite: i.sprite, name: i.name, desc: i.desc, tags: i.tags,
@@ -377,7 +397,7 @@ export class Game {
   // ---------- 갱신 ----------
 
   update(dtRaw: number) {
-    if (this.input.takePause() && this.phase !== 'ended' && this.phase !== 'reward' && this.phase !== 'exiting') {
+    if (this.input.takePause() && this.phase !== 'ended' && this.phase !== 'reward' && this.phase !== 'job' && this.phase !== 'exiting') {
       this.paused = !this.paused;
       this.ev.onPause(this.paused);
     }
@@ -389,7 +409,7 @@ export class Game {
     this.time += dt;
 
     this.updateFx(dt);
-    if (this.phase === 'reward') return;
+    if (this.phase === 'reward' || this.phase === 'job') return;
     if (this.phase === 'exiting') {
       this.updateExit(dt);
       return;
@@ -409,10 +429,11 @@ export class Game {
       this.updatePlayer(dt);
       this.updateProjs(dt, dt);
       this.updateChest(dt);
+      this.updateAltar();
       if (this.phase !== 'cleared') return;
       this.updateDrops(dt);
-      // 출구(사다리)에 올라서면 다음 단계로. 열지 않은 상자가 있으면 사다리를 막는다.
-      const chestWaiting = this.chest && !this.chest.looted;
+      // 출구(사다리)에 올라서면 다음 단계로. 열지 않은 상자나 쓰지 않은 제단이 있으면 사다리를 막는다.
+      const chestWaiting = (this.chest && !this.chest.looted) || (this.altar && !this.altar.used);
       if (!chestWaiting && dist(this.p.x, this.p.y, EXIT.x, EXIT.y) < 24) {
         this.phase = 'exiting';
         this.exitT = 0;
@@ -430,6 +451,7 @@ export class Game {
     this.updateProjs(dt, dt * slow);
     this.updateOrbit(dt);
     this.updateChest(dt);
+    this.updateAltar();
     this.updateDrops(dt);
     this.enemies = this.enemies.filter((e) => !e.dead);
 
@@ -486,8 +508,18 @@ export class Game {
   }
 
   /** 보유 아이템으로 시너지를 다시 계산하고, 새로 발동한 것을 알린다. */
+  /** 시너지 계산용 목록: 보유 아이템 + 상위 직업 태그(가상의 아이템 1개로 센다) */
+  private synItems(extra?: string): string[] {
+    const ids = [...this.itemCounts.keys()];
+    if (extra) ids.push(extra);
+    if (this.job.tag) ids.push(`job:${this.job.id}`);
+    return ids;
+  }
+
+  private tagsOf = (id: string): Tag[] => (id.startsWith('job:') ? [charById(id.slice(4)).tag!] : itemById(id).tags);
+
   private refreshSynergies() {
-    const next = activeSynergies(this.itemCounts.keys(), (id) => itemById(id).tags);
+    const next = activeSynergies(this.synItems(), this.tagsOf);
     for (const id of next) {
       if (this.syn.has(id)) continue;
       const isSet = id.startsWith('set:');
@@ -502,7 +534,7 @@ export class Game {
 
   /** 일시정지 화면용: 발동 중인 시너지와 태그별 진행도 */
   synergyInfo() {
-    const counts = tagCounts(this.itemCounts.keys(), (id) => itemById(id).tags);
+    const counts = tagCounts(this.synItems(), this.tagsOf);
     return {
       active: [...this.syn],
       sets: SETS.map((st) => ({ ...st, count: counts.get(st.tag) ?? 0 })),
@@ -562,7 +594,7 @@ export class Game {
     this.gs = z;
     const p = this.p;
     const prev = p.maxHp;
-    p.maxHp = Math.max(10, Math.round(this.char.hp + this.m.maxHp + z.maxHp));
+    p.maxHp = Math.max(10, Math.round(this.baseHp + this.m.maxHp + z.maxHp));
     if (p.maxHp > prev) p.hp += p.maxHp - prev;
     p.hp = Math.min(p.hp, p.maxHp);
   }
@@ -629,6 +661,66 @@ export class Game {
     }
   }
 
+  /** 전직 제단: 막힌 물체. 방을 클리어하면 E로 전직을 고른다. */
+  private updateAltar() {
+    const al = this.altar;
+    this.nearAltar = false;
+    if (!al) return;
+    const p = this.p;
+    const dx = p.x - al.x;
+    const dy = p.y - al.y;
+    const d = Math.hypot(dx, dy);
+    const minD = p.r + 20;
+    if (d < minD && d > 0.01) {
+      p.x = al.x + (dx / d) * minD;
+      p.y = al.y + (dy / d) * minD;
+    }
+    if (al.used || this.phase !== 'cleared') return;
+    this.nearAltar = d < minD + 26;
+    if (this.nearAltar && this.input.takeInteract()) {
+      this.phase = 'job';
+      this.ev.onJob(al.tier, nextJobs(this.job).map((j) => j.id));
+    }
+  }
+
+  /** 전직을 적용한다. 1차는 체력, 이동 속도, 무기, 스킬을 바꾸고 2차는 패시브와 태그를 더한다. */
+  pickJob(id: string) {
+    if (this.phase !== 'job' || !this.altar) return;
+    const j = charById(id);
+    const p = this.p;
+    this.job = j;
+    if (j.tier === 1) {
+      this.line = j.id;
+      this.baseHp = j.hp;
+      this.baseSpeed = j.speed;
+      this.sprite = j.sprite;
+    } else {
+      this.baseHp += j.hp;
+    }
+    if (j.skill) {
+      p.skillId = j.skill;
+      p.skillCd = 0;
+    }
+    if (j.startWeapon) {
+      // 직업 무기를 손에 쥐고, 쓰던 무기는 발밑에 내려놓는다(다시 바꿀 수 있다).
+      const old = this.equip.weapon;
+      this.equip.weapon = makeGear(weaponById(j.startWeapon), old ? Math.min(old.rarity, 1) : 0, this.room);
+      if (old) this.drops.push({ x: p.x + 30, y: p.y + 20, gear: old, t: 0 });
+    }
+    j.apply?.(this.m);
+    const before = p.maxHp;
+    this.recalc();
+    if (p.maxHp < before) p.hp = Math.min(p.hp, p.maxHp);
+    else p.hp = Math.min(p.maxHp, p.hp + p.maxHp * 0.3); // 전직 축복: 체력 30% 회복
+    this.refreshSynergies();
+    this.altar.used = true;
+    this.phase = 'cleared';
+    this.burst(p.x, p.y - 10, 40, j.color, 260, { size: 4, life: 0.8, grav: 60 });
+    this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.5, r: 80, color: j.color });
+    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 10, t: 0, life: 2.4, big: true, text: `전직: ${j.name}`, color: j.color });
+    this.shake = Math.max(this.shake, 6);
+  }
+
   private updateDrops(dt: number) {
     const p = this.p;
     let best: Drop | null = null;
@@ -669,7 +761,7 @@ export class Game {
     let v = this.m.dmg * (1 + this.gs.dmgPct);
     if (this.has('set:blood') && this.p.hp / this.p.maxHp < 0.4) v *= 1.3;
     if (this.p.rageT > 0) v *= 1.5;
-    if (this.char.id === 'berserker') v *= 1 + (1 - this.p.hp / this.p.maxHp);
+    if (this.line === 'berserker') v *= 1 + (1 - this.p.hp / this.p.maxHp);
     return v;
   }
 
@@ -696,14 +788,16 @@ export class Game {
     } else {
       const a = this.input.axis();
       p.moving = a.x !== 0 || a.y !== 0;
-      const sp = this.char.speed * this.m.speed * Math.max(0.5, 1 + this.gs.speed) * (this.has('set:swift') ? 1.15 : 1);
+      this.stillT = p.moving ? 0 : this.stillT + dt;
+      const sp = this.baseSpeed * this.m.speed * Math.max(0.5, 1 + this.gs.speed) * (this.has('set:swift') ? 1.15 : 1);
       p.x += a.x * sp * dt;
       p.y += a.y * sp * dt;
     }
     p.x = clamp(p.x, WALL + p.r, W - WALL - p.r);
     p.y = clamp(p.y, TOP + p.r, H - WALL - p.r);
 
-    if (this.input.takeSkill() && p.skillCd <= 0) this.useSkill();
+    if (this.input.takeSkill() && p.skillId && p.skillCd <= 0) this.useSkill();
+    this.assassinT = Math.max(0, this.assassinT - dt);
 
     let rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1);
     if (this.has('set:swift') && p.moving) rate *= 1.2;
@@ -736,6 +830,7 @@ export class Game {
         p.dashY = useMove ? a.y : Math.sin(p.aim);
         p.dashT = 0.18;
         p.invuln = Math.max(p.invuln, 0.3);
+        if (this.job.id === 'assassin') this.assassinT = 1.5;
         break;
       }
       case 'nova': {
@@ -761,7 +856,9 @@ export class Game {
         p.slowT = 4;
         break;
       case 'turret':
-        this.turrets.push({ x: p.x, y: p.y, t: 8, cd: 0 });
+        this.turrets.push({ x: p.x, y: p.y, t: this.job.id === 'trapper' ? 12 : 8, cd: 0 });
+        // 덫사냥꾼은 2개, 나머지는 1개까지 유지(오래된 것부터 사라짐)
+        while (this.turrets.length > (this.job.id === 'trapper' ? 2 : 1)) this.turrets.shift();
         break;
       case 'rage':
         p.rageT = 5;
@@ -790,21 +887,31 @@ export class Game {
       const elem = this.elementColor();
       const step = bow ? 0.12 : 0.18;
       const speed = (bow ? 560 : 380) * (sharp ? 1.3 : 1);
+      const aimed = this.job.id === 'sniper' && this.stillT >= 0.4;
+      const pdmg = aimed ? dmg * 1.6 : dmg;
       for (let i = 0; i < count; i++) {
         const a = p.aim + (i - (count - 1) / 2) * step;
         this.projs.push({
           x: p.x + Math.cos(a) * 18, y: p.y - 6 + Math.sin(a) * 18,
           vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
-          r: bow ? 4 : 9, dmg, life: bow ? 1.2 : 1.6, friendly: true,
-          pierce: m.pierce + (bow ? 0 : 2) + (sharp ? 1 : 0), bounce: m.bounce, hit: new Set(),
-          color: elem ?? (b.id === 'staff_green' ? '#7ee08a' : '#b49cff'), glow: elem,
+          r: bow ? 4 : 9, dmg: pdmg, life: bow ? 1.2 : 1.6, friendly: true,
+          pierce: m.pierce + (bow ? 0 : 2) + (sharp ? 1 : 0) + (aimed ? 2 : 0), bounce: m.bounce, hit: new Set(),
+          color: elem ?? (b.id === 'staff_green' ? '#7ee08a' : '#b49cff'), glow: aimed ? '#ffffff' : elem,
           sprite: bow ? 'w_arrow' : undefined,
         });
       }
       return;
     }
 
-    const range = (b.range + m.extra * 16) * (this.has('set:shot') ? 1.2 : 1);
+    const range = (b.range + m.extra * 16) * (this.has('set:shot') ? 1.2 : 1) * (this.job.id === 'swordmaster' ? 1.25 : 1);
+    if (this.job.id === 'swordmaster') {
+      // 검기: 다른 효과를 다시 일으키지 않는 관통 투사체
+      this.projs.push({
+        x: p.x + Math.cos(p.aim) * 20, y: p.y - 4 + Math.sin(p.aim) * 20,
+        vx: Math.cos(p.aim) * 520, vy: Math.sin(p.aim) * 520, r: 10, dmg: dmg * 0.6, life: 0.5, friendly: true,
+        pierce: 3, bounce: 0, hit: new Set(), color: '#bff4ff', glow: '#9fe6ff', proc: true,
+      });
+    }
     const ax = Math.cos(p.aim);
     const ay = Math.sin(p.aim);
     for (const e of this.enemies) {
@@ -1104,7 +1211,12 @@ export class Game {
     if (e.dead) return;
     let d = base;
     let crit = false;
-    if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= this.has('execute') ? 3 : 2; crit = true; }
+    if (fromPlayer && this.job.id === 'chronomancer' && (this.p.slowT > 0 || e.frostT > 0)) d *= 1.4;
+    if (fromPlayer && !proc && this.assassinT > 0) {
+      d *= 2.5;
+      crit = true;
+      this.assassinT = 0;
+    } else if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= this.has('execute') ? 3 : 2; crit = true; }
     e.hp -= d;
     e.flash = 0.1;
     if (fromPlayer) {
@@ -1160,6 +1272,18 @@ export class Game {
     }
     if (!proc && this.m.split > 0) this.shards(e.x, e.y, 3 * this.m.split, this.weapon.dmg * 0.4 * this.dmgMul(), this.has('chain_blast'));
     if (this.has('set:blood')) this.heal(2);
+    if (this.job.id === 'paladin') this.heal(1);
+    if (this.job.id === 'bloodlord') this.heal(2);
+    if (this.job.id === 'venomancer' && e.poisonT > 0) {
+      // 독술사: 중독된 적이 터지며 주변에 독을 퍼뜨린다.
+      for (const o of this.enemies) {
+        if (o.dead || o === e || dist(o.x, o.y, e.x, e.y) > 90 + o.r) continue;
+        o.poisonStacks = Math.min(5, Math.max(o.poisonStacks, e.poisonStacks));
+        o.poisonT = Math.max(o.poisonT, 3);
+        this.hurtEnemy(o, 6 * this.m.dmg, true, true);
+      }
+      this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.3, r: 90, color: '#8ae06a' });
+    }
     if (this.has('set:element') && (e.burnT > 0 || e.poisonT > 0)) {
       // 원소술사: 상태이상이 주변으로 옮겨 붙는다.
       for (const o of this.enemies) {
@@ -1186,11 +1310,17 @@ export class Game {
       p.shieldT = 0;
       p.invuln = 0.6;
       this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.3, r: 34, color: '#7fd1ff' });
+      if (this.job.id === 'paladin') {
+        this.blast(p.x, p.y, 120, 40 * this.dmgMul());
+        this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.4, r: 120, color: '#ffe08a' });
+        this.heal(6);
+      }
       return;
     }
     // 방어: 방어 수치 a에 대해 a / (a + 15) 비율만큼 피해 감소
     const armor = this.gs.armor;
-    const taken = Math.max(1, dmg * (1 - armor / (armor + 15)));
+    let taken = Math.max(1, dmg * (1 - armor / (armor + 15)));
+    if (this.job.id === 'undying' && p.rageT > 0) taken *= 0.6;
     p.hp -= taken;
     p.invuln = 0.7;
     this.shake = Math.max(this.shake, 7);
@@ -1213,6 +1343,15 @@ export class Game {
       const a = Math.atan2(p.y - src.y, p.x - src.x);
       p.x += Math.cos(a) * 18;
       p.y += Math.sin(a) * 18;
+    }
+    if (p.hp <= 0 && this.job.id === 'undying' && !this.undyingUsed) {
+      // 불굴: 런마다 한 번 죽음을 버틴다.
+      this.undyingUsed = true;
+      p.hp = 1;
+      p.invuln = 2;
+      this.shake = 12;
+      this.fx.push({ kind: 'text', x: W / 2, y: H / 2, t: 0, life: 1.8, big: true, text: '불굴!', color: '#e0e0e0' });
+      this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.5, r: 90, color: '#ffffff' });
     }
     if (p.hp <= 0) {
       p.hp = 0;
@@ -1276,7 +1415,7 @@ export class Game {
       c.fillRect(0, 0, W, H);
     }
 
-    if (this.phase === 'cleared' || this.phase === 'exiting' || this.phase === 'reward') {
+    if (this.phase === 'cleared' || this.phase === 'exiting' || this.phase === 'reward' || this.phase === 'job') {
       const pulse = 0.5 + 0.5 * Math.sin(this.time * 4);
       c.fillStyle = `rgba(255, 230, 140, ${0.12 + 0.12 * pulse})`;
       c.beginPath();
@@ -1286,6 +1425,7 @@ export class Game {
     }
 
     if (this.chest) this.renderChest(c, this.chest);
+    if (this.altar) this.renderAltar(c, this.altar);
 
     for (const d of this.drops) {
       const bob = Math.sin(d.t * 3) * 3;
@@ -1422,10 +1562,22 @@ export class Game {
       c.rect(0, 0, W, EXIT.y + 3);
       c.clip();
     }
-    drawSprite(c, this.char.sprite, p.x, p.y + p.r - air + this.sink, 2.5, {
+    if (this.job.tier === 2 && this.sink <= 0) {
+      // 상위 직업: 발밑에 직업 색 오라
+      c.save();
+      c.globalAlpha *= 0.35 + 0.15 * Math.sin(this.time * 4);
+      c.strokeStyle = this.job.color;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.ellipse(p.x, p.y + p.r - air, 18, 6, 0, 0, Math.PI * 2);
+      c.stroke();
+      c.restore();
+    }
+    drawSprite(c, this.sprite, p.x, p.y + p.r - air + this.sink, 2.5, {
       anchor: 'feet',
-      frame: animFrame(this.char.sprite, this.time, p.moving || p.dashT > 0, 10),
+      frame: animFrame(this.sprite, this.time, p.moving || p.dashT > 0, 10),
       flip: facingLeft,
+      gray: this.job.tier === 0,
     });
     if (this.sink > 0) c.restore();
     if (this.phase !== 'exiting' && this.enterT <= 0) this.renderWeapon(c);
@@ -1563,11 +1715,15 @@ export class Game {
         colored.push({ x: d.x, y: d.y, r: 40, rgb, a: 0.3 });
       }
     }
+    if (this.altar) {
+      lights.push({ x: this.altar.x, y: this.altar.y, r: 90 });
+      if (!this.altar.used) colored.push({ x: this.altar.x, y: this.altar.y - 20, r: 80, rgb: [160, 130, 255], a: 0.25 });
+    }
     if (this.chest) {
       lights.push({ x: this.chest.x, y: this.chest.y, r: 90 });
       if (!this.chest.looted) colored.push({ x: this.chest.x, y: this.chest.y, r: 70, rgb: [255, 200, 90], a: 0.25 });
     }
-    if (this.phase === 'cleared' || this.phase === 'exiting' || this.phase === 'reward') {
+    if (this.phase === 'cleared' || this.phase === 'exiting' || this.phase === 'reward' || this.phase === 'job') {
       lights.push({ x: EXIT.x, y: EXIT.y, r: 140 });
       colored.push({ x: EXIT.x, y: EXIT.y, r: 90, rgb: [255, 220, 130], a: 0.3 });
     }
@@ -1627,6 +1783,72 @@ export class Game {
   }
 
   /** 가까운 드랍 장비의 정보와 현재 장착 장비 비교 */
+  private renderAltar(c: CanvasRenderingContext2D, al: { x: number; y: number; tier: 1 | 2; used: boolean }) {
+    const ready = this.phase === 'cleared' && !al.used;
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 3);
+    const { x, y } = al;
+    // 바닥 마법진
+    c.save();
+    c.translate(x, y + 18);
+    c.scale(1, 0.4);
+    c.rotate(this.time * (ready ? 0.8 : 0.2));
+    c.strokeStyle = al.used ? 'rgba(120, 110, 130, 0.4)' : `rgba(170, 140, 255, ${ready ? 0.5 + 0.4 * pulse : 0.3})`;
+    c.lineWidth = 3;
+    c.setLineDash([10, 7]);
+    c.beginPath();
+    c.arc(0, 0, 40, 0, Math.PI * 2);
+    c.stroke();
+    c.setLineDash([]);
+    c.restore();
+    // 석단: 아래 넓은 단, 위 좁은 기둥
+    c.fillStyle = 'rgba(0,0,0,0.4)';
+    c.beginPath();
+    c.ellipse(x, y + 22, 26, 7, 0, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#000';
+    c.fillRect(x - 24, y + 6, 48, 16);
+    c.fillRect(x - 14, y - 22, 28, 30);
+    c.fillStyle = '#5e5466';
+    c.fillRect(x - 22, y + 8, 44, 12);
+    c.fillStyle = '#74697e';
+    c.fillRect(x - 12, y - 20, 24, 28);
+    c.fillStyle = '#8c8197';
+    c.fillRect(x - 22, y + 8, 44, 3);
+    c.fillRect(x - 12, y - 20, 24, 3);
+    // 룬
+    c.fillStyle = al.used ? '#4a4252' : '#b9a6ff';
+    c.fillRect(x - 2, y - 13, 4, 14);
+    c.fillRect(x - 6, y - 9, 12, 3);
+    // 떠 있는 수정
+    if (!al.used) {
+      const by = y - 38 + Math.sin(this.time * 2.4) * 4;
+      c.fillStyle = `rgba(170, 140, 255, ${ready ? 0.35 + 0.25 * pulse : 0.15})`;
+      c.beginPath();
+      c.arc(x, by, 16, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = ready ? '#d8ccff' : '#8a7cc0';
+      c.beginPath();
+      c.moveTo(x, by - 11);
+      c.lineTo(x + 7, by);
+      c.lineTo(x, by + 11);
+      c.lineTo(x - 7, by);
+      c.closePath();
+      c.fill();
+      c.fillStyle = '#ffffff';
+      c.fillRect(x - 2, by - 6, 2, 5);
+    }
+    if (this.nearAltar && ready) {
+      const t = al.tier === 1 ? 'E 전직하기' : 'E 상위 전직';
+      c.textAlign = 'center';
+      c.font = this.font(15);
+      c.lineWidth = 4;
+      c.strokeStyle = 'rgba(0,0,0,0.85)';
+      c.strokeText(t, x, y - 60);
+      c.fillStyle = '#d8ccff';
+      c.fillText(t, x, y - 60);
+    }
+  }
+
   private renderChest(c: CanvasRenderingContext2D, ch: { x: number; y: number; openT: number; looted: boolean }) {
     const ready = this.phase === 'cleared' && ch.openT < 0;
     c.fillStyle = 'rgba(0,0,0,0.4)';
@@ -1797,7 +2019,7 @@ export class Game {
     c.beginPath();
     c.rect(22, 20, 46, 46);
     c.clip();
-    drawSprite(c, this.char.sprite, 45, 74, 2.4, { anchor: 'feet', frame: animFrame(this.char.sprite, this.time, false, 5) });
+    drawSprite(c, this.sprite, 45, 74, 2.4, { anchor: 'feet', frame: animFrame(this.sprite, this.time, false, 5), gray: this.job.tier === 0 });
     c.restore();
 
     const hpK = Math.max(0, p.hp / p.maxHp);
@@ -1807,33 +2029,45 @@ export class Game {
     c.fillStyle = '#fff4e6';
     c.fillText(`HP ${Math.ceil(p.hp)}/${p.maxHp}`, 86, 33);
 
-    const sk = skillById(p.skillId);
-    const full = sk.cd * this.skillCdMul();
     const sx = 78;
     const sy = 42;
-    c.fillStyle = '#0a0608';
-    c.fillRect(sx, sy, 28, 28);
-    drawIcon(c, sk.sprite, sx + 14, sy + 14, 22);
-    if (p.skillCd > 0) {
-      c.fillStyle = 'rgba(0,0,0,0.65)';
-      c.beginPath();
-      c.moveTo(sx + 14, sy + 14);
-      c.arc(sx + 14, sy + 14, 20, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (p.skillCd / full));
-      c.closePath();
-      c.save();
-      c.clip();
+    // 직업 이름
+    c.textAlign = 'right';
+    c.font = this.font(14);
+    c.fillStyle = this.job.color;
+    c.fillText(this.job.name, 276, sy + 13);
+    c.textAlign = 'left';
+    const sk = p.skillId ? skillById(p.skillId) : null;
+    if (!sk) {
+      c.font = this.font(13);
+      c.fillStyle = '#6f6152';
+      c.fillText('스킬 없음', sx, sy + 19);
+    } else {
+      const full = sk.cd * this.skillCdMul();
+      c.fillStyle = '#0a0608';
       c.fillRect(sx, sy, 28, 28);
-      c.restore();
+      drawIcon(c, sk.sprite, sx + 14, sy + 14, 22);
+      if (p.skillCd > 0) {
+        c.fillStyle = 'rgba(0,0,0,0.65)';
+        c.beginPath();
+        c.moveTo(sx + 14, sy + 14);
+        c.arc(sx + 14, sy + 14, 20, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (p.skillCd / full));
+        c.closePath();
+        c.save();
+        c.clip();
+        c.fillRect(sx, sy, 28, 28);
+        c.restore();
+      }
+      c.strokeStyle = p.skillCd > 0 ? '#4a3830' : '#ffd27a';
+      c.lineWidth = 2;
+      c.strokeRect(sx + 1, sy + 1, 26, 26);
+      c.font = this.font(15);
+      c.fillStyle = p.skillCd > 0 ? '#a8967f' : '#ffe9c8';
+      c.fillText(sk.name, sx + 36, sy + 13);
+      c.font = '7px "Press Start 2P", monospace';
+      c.fillStyle = '#6f6152';
+      c.fillText(p.skillCd > 0 ? `${p.skillCd.toFixed(1)}s` : 'SPACE', sx + 36, sy + 25);
     }
-    c.strokeStyle = p.skillCd > 0 ? '#4a3830' : '#ffd27a';
-    c.lineWidth = 2;
-    c.strokeRect(sx + 1, sy + 1, 26, 26);
-    c.font = this.font(15);
-    c.fillStyle = p.skillCd > 0 ? '#a8967f' : '#ffe9c8';
-    c.fillText(sk.name, sx + 36, sy + 13);
-    c.font = '7px "Press Start 2P", monospace';
-    c.fillStyle = '#6f6152';
-    c.fillText(p.skillCd > 0 ? `${p.skillCd.toFixed(1)}s` : 'SPACE', sx + 36, sy + 25);
 
     // 위 가운데: 층 이름과 방 진행도
     const pw = 15 * 14 + 24;
@@ -1949,9 +2183,11 @@ export class Game {
       c.strokeStyle = 'rgba(0,0,0,0.8)';
       const msg = this.room >= FINAL_ROOM
         ? '사다리에 올라 던전을 탈출하세요'
-        : this.chest && !this.chest.looted
-          ? '보물 상자의 잠금이 풀렸습니다! 상자 앞에서 E를 누르세요'
-          : '장비를 정리하고 위쪽 사다리로 이동하세요';
+        : this.altar && !this.altar.used
+          ? '전직의 제단이 깨어났습니다! 제단 앞에서 E를 누르세요'
+          : this.chest && !this.chest.looted
+            ? '보물 상자의 잠금이 풀렸습니다! 상자 앞에서 E를 누르세요'
+            : '장비를 정리하고 위쪽 사다리로 이동하세요';
       c.strokeText(msg, W / 2, EXIT.y + 50);
       c.fillStyle = '#ffe9a0';
       c.fillText(msg, W / 2, EXIT.y + 50);

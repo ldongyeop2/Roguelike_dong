@@ -9,6 +9,7 @@ export type IconRef = SpriteKey | GenKey;
 const SHEET = 512;
 const sheet = new Image();
 let white: HTMLCanvasElement | null = null; // 피격 깜빡임용 흰색 실루엣
+let gray: HTMLCanvasElement | null = null; // 아직 전직하지 않은 모험가용 무채색 시트
 
 sheet.onload = () => {
   const cv = document.createElement('canvas');
@@ -20,6 +21,23 @@ sheet.onload = () => {
   c.fillStyle = '#ffffff';
   c.fillRect(0, 0, cv.width, cv.height);
   white = cv;
+  const gv = document.createElement('canvas');
+  gv.width = sheet.width;
+  gv.height = sheet.height;
+  const g = gv.getContext('2d')!;
+  g.drawImage(sheet, 0, 0);
+  const img = g.getImageData(0, 0, gv.width, gv.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // 명암 대비를 키워 밝은 머리색과 피부가 하얗게 뭉개지지 않게 한다.
+    const lum = d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+    const l = Math.max(0, Math.min(255, (lum - 128) * 1.35 + 112));
+    d[i] = l;
+    d[i + 1] = l;
+    d[i + 2] = Math.min(255, l * 1.06);
+  }
+  g.putImageData(img, 0, 0);
+  gray = gv;
 };
 sheet.src = sheetUrl;
 
@@ -30,6 +48,7 @@ export interface DrawOpts {
   flip?: boolean;
   rot?: number;
   flash?: boolean;
+  gray?: boolean;
   /** 기준점: center(기본) 또는 feet(아래 가운데) */
   anchor?: 'center' | 'feet';
 }
@@ -45,7 +64,7 @@ export function animFrame(key: SpriteKey, t: number, moving: boolean, fps = 8): 
 /** 시트의 스프라이트를 scale 배로 (x, y)에 그린다. */
 export function drawSprite(c: CanvasRenderingContext2D, key: SpriteKey, x: number, y: number, scale: number, o: DrawOpts = {}) {
   const s: Spr = S[key];
-  const src = o.flash && white ? white : sheet;
+  const src = o.flash && white ? white : o.gray && gray ? gray : sheet;
   const w = s.w * scale;
   const h = s.h * scale;
   c.save();

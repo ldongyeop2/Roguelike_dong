@@ -1,12 +1,12 @@
 import {
-  ALL_DEFS, CHARACTERS, ITEMS, SKILLS, charById, itemById, skillById, unlockText, type AnyDef,
+  ALL_DEFS, CHARACTERS, ITEMS, SKILLS, charById, itemById, nextJobs, skillById, unlockText, type AnyDef, type CharDef,
 } from './content';
 import { isUnlocked, progressOf, type RunResult, type Save } from './meta';
 import type { Card } from './game';
 import { paintGenIcons } from './icons';
 import { iconHtml, type IconRef } from './sprites';
 import { PAIRS, SETS, SET_NEED, SYN_NAME, TAG_INFO, type SetBonus, type Tag } from './synergy';
-import { ARMORS, RARITY, SLOT_LABEL, WEAPONS, WKIND_LABEL, gearLines, gearTitle, weaponById, type Gear, type Slot } from './gear';
+import { ARMORS, RARITY, SLOT_LABEL, WEAPONS, gearLines, gearTitle, weaponById, type Gear, type Slot } from './gear';
 
 const icon = (key: IconRef, px = 32) => `<span class="icon">${iconHtml(key, px)}</span>`;
 
@@ -14,12 +14,14 @@ const tagChips = (tags: Tag[] | undefined) => (tags && tags.length
   ? `<div class="tags">${tags.map((t) => `<span class="tag-chip" style="color:${TAG_INFO[t].color};border-color:${TAG_INFO[t].color}">${TAG_INFO[t].name}</span>`).join('')}</div>`
   : '');
 
-const KIND_LABEL = { char: '캐릭터', item: '아이템', skill: '스킬', gear: '장비' } as const;
+const KIND_LABEL = { char: '직업', item: '아이템', skill: '스킬', gear: '장비' } as const;
+
+/** 아직 전직하지 않은 모험가는 무채색으로 보여 준다. */
+const jobIcon = (c: CharDef, px = 32) => `<span class="icon"${c.tier === 0 ? ' style="filter:grayscale(1) contrast(1.35) brightness(0.9)"' : ''}>${iconHtml(c.sprite, px)}</span>`;
 
 export interface MenuHandlers {
   onStart(charId: string): void;
   onReset(): void;
-  onSelect(charId: string): void;
 }
 
 export class UI {
@@ -48,13 +50,13 @@ export class UI {
     if (!open) {
       return `<div class="card locked"><div class="name">??? <span class="sub">${KIND_LABEL[d.kind]}</span></div>${this.lockInfo(save, d)}</div>`;
     }
-    const tags = d.kind === 'item' ? tagChips(d.tags) : '';
-    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${icon(d.sprite)}${d.name}</div>${tags}<div>${d.desc}</div></div>`;
+    const tags = d.kind === 'item' ? tagChips(d.tags) : d.kind === 'char' && d.tag ? tagChips([d.tag]) : '';
+    const sub = d.kind === 'char' && d.parent ? `<div class="sub">${charById(d.parent).name}에서 전직</div>` : '';
+    const pas = d.kind === 'char' && d.passive ? `<div class="sub">${d.passive}</div>` : '';
+    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${icon(d.sprite)}${d.name}</div>${sub}${tags}<div>${d.desc}</div>${pas}</div>`;
   }
 
-  showMenu(save: Save, h: MenuHandlers, tab: 'play' | 'codex' = 'play', picked?: string) {
-    const sel = picked && isUnlocked(save, picked) ? picked : isUnlocked(save, save.lastChar) ? save.lastChar : 'knight';
-    h.onSelect(sel);
+  showMenu(save: Save, h: MenuHandlers, tab: 'play' | 'codex' = 'play') {
     const got = ALL_DEFS.filter((d) => isUnlocked(save, d.id)).length;
     const s = save.stats;
     const side = `
@@ -73,19 +75,17 @@ export class UI {
           <button data-tab="play" class="${tab === 'play' ? 'active' : ''}">출정</button>
           <button data-tab="codex" class="${tab === 'codex' ? 'active' : ''}">해금 도감</button>
         </div>
-        <h3>캐릭터</h3>
-        <div class="roster">${CHARACTERS.map((c) => this.heroRow(save, c.id, c.id === sel)).join('')}</div>
+        <h3>전직 계보</h3>
+        <div class="roster">${CHARACTERS.filter((c) => c.tier === 1).map((c) => this.jobRow(save, c)).join('')}</div>
         <div class="foot">
           <div class="keys"><kbd>WASD</kbd> 이동 <kbd>LMB</kbd> 공격 <kbd>SPACE</kbd> 스킬<br><kbd>E</kbd> 장비 <kbd>ESC</kbd> 일시정지</div>
           <button id="reset" class="small danger">기록 초기화</button>
         </div>
       </aside>`;
-    const el = this.mount(side + (tab === 'play' ? this.heroCard(sel) : this.codexTab(save)), 'screen menu');
+    const el = this.mount(side + (tab === 'play' ? this.heroCard() : this.codexTab(save)), 'screen menu');
     el.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) =>
-      b.addEventListener('click', () => this.showMenu(save, h, b.dataset.tab as 'play' | 'codex', sel)));
-    el.querySelectorAll<HTMLElement>('[data-char]').forEach((b) =>
-      b.addEventListener('click', () => this.showMenu(save, h, 'play', b.dataset.char)));
-    el.querySelector('#start')?.addEventListener('click', () => h.onStart(sel));
+      b.addEventListener('click', () => this.showMenu(save, h, b.dataset.tab as 'play' | 'codex')));
+    el.querySelector('#start')?.addEventListener('click', () => h.onStart('adventurer'));
     // 브라우저 확인 대화상자를 쓸 수 없는 환경이 있어 두 번 눌러 확인하는 방식으로 처리한다.
     const reset = el.querySelector<HTMLButtonElement>('#reset');
     reset?.addEventListener('click', () => {
@@ -95,23 +95,25 @@ export class UI {
     });
   }
 
-  private heroRow(save: Save, id: string, sel: boolean): string {
-    const c = charById(id);
-    if (!isUnlocked(save, id)) {
+  /** 1차 직업 한 줄과 그 아래 상위 직업 두 갈래 */
+  private jobRow(save: Save, c: CharDef): string {
+    const branch = nextJobs(c).map((j) => isUnlocked(save, j.id)
+      ? `<span class="branch" style="color:${j.color}">${j.name}</span>`
+      : `<span class="branch locked" title="${unlockText(j.unlock!)}">??? <small>${unlockText(j.unlock!)}</small></span>`).join('');
+    if (!isUnlocked(save, c.id)) {
       const pr = progressOf(save, c.unlock!);
-      return `<div class="hero-row locked">${icon(c.sprite)}<div><div class="nm">???</div>
+      return `<div class="hero-row locked">${jobIcon(c)}<div><div class="nm">???</div>
         <div class="ds">${unlockText(c.unlock!)} (${pr.cur}/${pr.target})</div>
         <div class="bar"><i style="width:${(pr.cur / pr.target) * 100}%"></i></div></div></div>`;
     }
     const w = weaponById(c.startWeapon);
-    return `<button class="hero-row ${sel ? 'sel' : ''}" data-char="${id}">${icon(c.sprite)}
-      <div><div class="nm">${c.name}</div><div class="ds">${w.name} · ${skillById(c.skill).name}</div></div></button>`;
+    return `<div class="hero-row">${jobIcon(c)}
+      <div><div class="nm">${c.name} <span class="ds">${w.name} · ${skillById(c.skill).name}</span></div><div class="branches">${branch}</div></div></div>`;
   }
 
-  private heroCard(id: string): string {
-    const c = charById(id);
+  private heroCard(): string {
+    const c = charById('adventurer');
     const w = weaponById(c.startWeapon);
-    const sk = skillById(c.skill);
     return `
       <section class="hero-card">
         <div class="title"><b>${c.name}</b><span>READY</span></div>
@@ -119,8 +121,8 @@ export class UI {
         <div class="chips">
           <span class="chip">체력 <b>${c.hp}</b></span>
           <span class="chip">이동 <b>${c.speed}</b></span>
-          <span class="chip">무기 <b>${w.name}</b> (${WKIND_LABEL[w.wkind]})</span>
-          <span class="chip">스킬 <b>${sk.name}</b></span>
+          <span class="chip">무기 <b>${w.name}</b></span>
+          <span class="chip">스킬 <b>없음</b></span>
         </div>
         <button id="start" class="primary">던전으로 출정</button>
       </section>`;
@@ -133,8 +135,9 @@ export class UI {
     };
     return `<section class="codex">
       <div class="top"><h1>해금 도감</h1><button data-tab="play">닫기</button></div>
-      <p class="sub">죽음과 기록이 쌓일수록 새 캐릭터, 스킬, 아이템, 장비가 던전에 등장합니다.</p>
-      ${sec('캐릭터', CHARACTERS) + sec('스킬', SKILLS) + sec('아이템', ITEMS)}
+      <p class="sub">죽음과 기록이 쌓일수록 새 직업, 스킬, 아이템, 장비가 던전에 등장합니다.</p>
+      ${sec('1차 직업', CHARACTERS.filter((c) => c.tier === 1)) + sec('상위 직업', CHARACTERS.filter((c) => c.tier === 2))}
+      ${sec('스킬', SKILLS) + sec('아이템', ITEMS)}
       ${this.synergySection(save)}
       ${sec('장비: 무기', WEAPONS) + sec('장비: 방어구와 장신구', ARMORS)}
     </section>`;
@@ -161,6 +164,32 @@ export class UI {
       'screen dim');
     el.querySelectorAll<HTMLElement>('[data-i]').forEach((b) =>
       b.addEventListener('click', () => onPick(cards[Number(b.dataset.i)])));
+  }
+
+  /** 전직 선택. 잠긴 직업은 해금 조건만 보여 주고 고를 수 없다. */
+  showJob(save: Save, tier: number, ids: string[], onPick: (id: string) => void) {
+    const card = (j: CharDef) => {
+      if (!isUnlocked(save, j.id)) {
+        const pr = progressOf(save, j.unlock!);
+        return `<div class="card locked"><div class="name">${jobIcon(j, 48)}???</div>
+          <div class="sub">해금: ${unlockText(j.unlock!)} (${pr.cur}/${pr.target})</div>
+          <div class="bar"><i style="width:${(pr.cur / pr.target) * 100}%"></i></div></div>`;
+      }
+      const chips = j.tier === 1
+        ? `<div class="chips"><span class="chip">체력 <b>${j.hp}</b></span><span class="chip">이동 <b>${j.speed}</b></span>
+           <span class="chip">무기 <b>${weaponById(j.startWeapon).name}</b></span><span class="chip">스킬 <b>${skillById(j.skill).name}</b></span></div>`
+        : `${tagChips(j.tag ? [j.tag] : [])}<div class="sub">${j.passive ?? ''}</div>${j.hp ? `<div class="sub">최대 체력 +${j.hp}</div>` : ''}`;
+      return `<div class="card job" data-id="${j.id}" style="--c:${j.color}"><div class="name" style="color:${j.color}">${jobIcon(j, 48)}${j.name}</div>
+        <div>${j.desc}</div>${chips}</div>`;
+    };
+    const jobs = ids.map(charById);
+    const el = this.mount(
+      `<h1>${tier === 1 ? '전직의 제단' : '상위 전직'}</h1>
+       <div class="sub">${tier === 1 ? '나아갈 길을 고르세요. 무기와 스킬이 직업에 맞게 바뀝니다(쓰던 무기는 발밑에 남습니다).' : '직업의 길을 더 깊이 걸어갑니다. 상위 직업의 태그는 세트 효과에 1개로 셉니다.'}</div>
+       <div class="rewards">${jobs.map(card).join('')}</div>`,
+      'screen dim');
+    el.querySelectorAll<HTMLElement>('[data-id]').forEach((b) =>
+      b.addEventListener('click', () => onPick(b.dataset.id!)));
   }
 
   showPause(
