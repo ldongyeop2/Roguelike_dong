@@ -10,7 +10,7 @@ import type { Input } from './input';
 import { SETS, SYN_NAME, TAG_INFO, activeSynergies, tagCounts, type Tag } from './synergy';
 import type { RunResult } from './meta';
 import { FOUNTAIN_X, buildRoom, drawLighting, drawWallAnim, themeForRoom, type Light } from './room';
-import { animFrame, drawIcon, drawSprite, type IconRef } from './sprites';
+import { animFrame, drawIcon, drawRage, drawSprite, type IconRef } from './sprites';
 import { isGenKey } from './icons';
 import { S, type SpriteKey } from './spritesheet';
 import { boss3d, type BossPose } from './boss3d';
@@ -1582,32 +1582,15 @@ export class Game {
       }
       const drawn3d = e.kind === 'boss' && boss3d().draw(c, this.bossPose(e), this.time);
       if (!drawn3d) {
-        drawSprite(c, key, e.x, feet, scale, {
-          anchor: 'feet',
+        const opts = {
+          anchor: 'feet' as const,
           frame: animFrame(key, this.time + e.id * 0.37, e.state !== 1),
           flip: this.p.x < e.x,
           flash: e.flash > 0 || e.state === 1 || (e.phaseT > 0 && Math.sin(this.time * 40) > 0.3),
-        });
-        if (e.kind === 'boss' && e.bphase === 2) {
-          // 3D를 못 쓸 때의 2페이즈 모습: 붉은 기운과 머리 위 뿔
-          const top = feet - S[key].h * scale;
-          c.save();
-          c.globalCompositeOperation = 'lighter';
-          c.fillStyle = `rgba(255, 40, 60, ${0.18 + 0.1 * Math.sin(this.time * 6)})`;
-          c.beginPath();
-          c.ellipse(e.x, feet - (S[key].h * scale) / 2, e.r * 1.4, (S[key].h * scale) / 2, 0, 0, Math.PI * 2);
-          c.fill();
-          c.restore();
-          c.fillStyle = '#2a0608';
-          for (const side of [-1, 1]) {
-            c.beginPath();
-            c.moveTo(e.x + side * e.r * 0.35, top + 10);
-            c.lineTo(e.x + side * e.r * 0.75, top - 18);
-            c.lineTo(e.x + side * e.r * 0.15, top + 6);
-            c.closePath();
-            c.fill();
-          }
-        }
+        };
+        // 2페이즈: 다시 칠하고 뿔을 그려 넣은 전용 도트 그림
+        const rage = e.kind === 'boss' && e.bphase === 2 && drawRage(c, key, e.tier, e.x, feet, scale * 1.12, opts);
+        if (!rage) drawSprite(c, key, e.x, feet, scale, opts);
       }
       if (e.kind !== 'boss' && e.hp < e.maxHp) {
         const top = feet - S[key].h * scale - 6;

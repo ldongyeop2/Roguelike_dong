@@ -3,6 +3,7 @@
 // 모델: KayKit Character Pack Skeletons (Kay Lousberg, CC0). public/models/boss*.json (glTF)
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RAGE_EYE, RAGE_RAMP, recolor } from './rage';
 
 /** 보스 동작. 게임이 넘겨 주는 상태를 보고 애니메이션을 고른다. */
 export interface BossPose {
@@ -34,6 +35,7 @@ interface Model {
   head: THREE.Object3D | null; // 뿔이 따라갈 머리 뼈
   horns: THREE.Group; // 2페이즈 뿔
   hornUp: number; // 머리 뼈에서 뿔까지 높이
+  rageMap: THREE.Texture | null; // 2페이즈 텍스처(원본 텍스처를 팔레트로 다시 칠한 것)
 }
 
 const RES = 112; // 3D 렌더 해상도(px). 화면에서는 2.5~3배로 확대된다.
@@ -45,12 +47,6 @@ const TINT: Record<number, { eye: number; body: number; bodyI: number }> = {
   1: { eye: 0xff5a3a, body: 0x000000, bodyI: 0 },
   2: { eye: 0xc070ff, body: 0x2a0a40, bodyI: 0.35 },
   3: { eye: 0xff2050, body: 0x3a0010, bodyI: 0.5 },
-};
-// 2페이즈 색: 몸 전체가 이 색으로 타오르고 눈빛이 강해진다.
-const RAGE: Record<number, { body: number; eye: number; horn: number }> = {
-  1: { body: 0xff3a10, eye: 0xffd040, horn: 0x7a2a10 },
-  2: { body: 0x9a20ff, eye: 0xff60ff, horn: 0x4a1a80 },
-  3: { body: 0xff0030, eye: 0xffffff, horn: 0x6a0a20 },
 };
 const PHASE2_SCALE = 1.15;
 /** 뿔 모양(모델 키 = 1): 머리 뼈 기준 높이, 좌우 간격, 길이. 투구, 두건, 모자 밖으로 나오게 단계별로 맞춘다. */
@@ -137,6 +133,7 @@ class Boss3D {
       m.emissiveIntensity = glow ? 2.5 : tint.bodyI;
       m.userData.baseE = m.emissive.clone();
       m.userData.baseI = m.emissiveIntensity;
+      m.userData.baseMap = m.map;
       mesh.material = m;
       mats.push(m);
     });
@@ -148,11 +145,11 @@ class Boss3D {
     // 2페이즈 뿔: 머리 위에서 바깥쪽으로 휘어 솟은 원뿔 두 개. 머리 뼈 위치를 매 프레임 따라간다.
     const head = root.getObjectByName('head') ?? null;
     const horns = new THREE.Group();
-    const rage = RAGE[tier];
     const hs = HORN[tier];
     // 뿔 밑동은 짙은 단계 색, 끝은 밝게 빛나게 해서 붉게 물든 몸과 구분되게 한다.
-    const hornMat = new THREE.MeshStandardMaterial({ color: rage.horn, emissive: new THREE.Color(rage.horn), emissiveIntensity: 0.4, roughness: 0.5 });
-    const tipMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(rage.eye), emissiveIntensity: 1.5 });
+    // 2D 도트 뿔과 같은 색: 뼈빛 밑동, 팔레트 가장 밝은 색의 끝
+    const hornMat = new THREE.MeshStandardMaterial({ color: 0xece0c8, roughness: 0.7 });
+    const tipMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(RAGE_RAMP[tier][4]), emissive: new THREE.Color(RAGE_RAMP[tier][3]), emissiveIntensity: 0.6 });
     for (const side of [-1, 1]) {
       const cone = new THREE.Group();
       const baseH = hs.len * 0.75;
@@ -171,7 +168,32 @@ class Boss3D {
     horns.visible = false;
     holder.add(horns);
     const hornUp = hs.up;
-    this.models.set(tier, { root: holder, mixer, clips, mats, loop: '', oneShot: null, lastAct: 0, yaw: 0, head, horns, hornUp });
+    const baseMap = mats.find((x) => x.map)?.map ?? null;
+    const rageMap = baseMap ? this.makeRageMap(baseMap, tier) : null;
+    this.models.set(tier, { root: holder, mixer, clips, mats, loop: '', oneShot: null, lastAct: 0, yaw: 0, head, horns, hornUp, rageMap });
+  }
+
+  /** 원본 텍스처를 2D 도트와 같은 팔레트로 다시 칠한 2페이즈 텍스처 */
+  private makeRageMap(src: THREE.Texture, tier: number): THREE.Texture | null {
+    const im = src.image as CanvasImageSource & { width: number; height: number };
+    if (!im || !im.width) return null;
+    const cv = document.createElement('canvas');
+    cv.width = im.width;
+    cv.height = im.height;
+    const c = cv.getContext('2d')!;
+    c.drawImage(im, 0, 0);
+    const img = c.getImageData(0, 0, cv.width, cv.height);
+    recolor(img.data, tier, false);
+    c.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(cv);
+    t.flipY = src.flipY;
+    t.colorSpace = src.colorSpace;
+    t.magFilter = src.magFilter;
+    t.minFilter = src.minFilter;
+    t.wrapS = src.wrapS;
+    t.wrapT = src.wrapT;
+    t.needsUpdate = true;
+    return t;
   }
 
   /** 모델이 준비됐는지. 아니면 게임이 2D 그림으로 대신 그린다. */
@@ -251,20 +273,24 @@ class Boss3D {
   private renderModel(c: CanvasRenderingContext2D, m: Model, p: BossPose, alpha: number) {
     const flash = p.flash > 0 || p.state === 1;
     const now = performance.now();
-    const rage = RAGE[p.tier];
     for (const mat of m.mats) {
       const glow = mat.name === 'Glow';
       if (flash || (p.roar && Math.sin(now / 45) > 0.3)) {
         mat.emissive.setRGB(1, 1, 1);
         mat.emissiveIntensity = p.state === 1 ? 0.35 + 0.25 * Math.sin(now / 50) : 0.8;
       } else if (p.phase2) {
-        // 2페이즈: 몸이 단계 색으로 맥동하며 타오른다.
-        mat.emissive.setHex(glow ? rage.eye : rage.body);
-        mat.emissiveIntensity = glow ? 4 : 0.28 + 0.12 * Math.sin(now / 160);
+        // 2페이즈: 몸에 빛을 씌우지 않고 텍스처 자체를 바꾼다. 눈만 빛난다.
+        mat.emissive.set(glow ? RAGE_EYE[p.tier] : 0x000000);
+        mat.emissiveIntensity = glow ? 3 : 0;
       } else {
         mat.emissive.copy(mat.userData.baseE);
         mat.emissiveIntensity = mat.userData.baseI;
       }
+    }
+    for (const mat of m.mats) {
+      if (mat.name === 'Glow' || !mat.userData.baseMap) continue;
+      const want = p.phase2 && m.rageMap ? m.rageMap : mat.userData.baseMap;
+      if (mat.map !== want) mat.map = want;
     }
     // 뿔은 머리 뼈 위치를 따라간다(몸 방향은 holder가 돌려 준다).
     m.horns.visible = p.phase2;

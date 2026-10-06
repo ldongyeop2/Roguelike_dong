@@ -2,6 +2,7 @@
 import sheetUrl from './assets/dungeon-tileset-ii.png';
 import { GEN_SIZE, genCanvas, isGenKey, type GenKey } from './icons';
 import { S, type SpriteKey, type Spr } from './spritesheet';
+import { RAGE_RAMP, recolor } from './rage';
 
 /** 시트 스프라이트 또는 코드로 그린 아이콘 */
 export type IconRef = SpriteKey | GenKey;
@@ -75,6 +76,108 @@ export function drawSprite(c: CanvasRenderingContext2D, key: SpriteKey, x: numbe
   const oy = o.anchor === 'feet' ? -h : -h / 2;
   c.drawImage(src, s.x + (o.frame ?? 0) * s.w, s.y, s.w, s.h, -w / 2, oy, w, h);
   c.restore();
+}
+
+// ---------- 보스 2페이즈 스프라이트 ----------
+// 원본 프레임을 팔레트로 다시 칠하고, 프레임마다 머리 꼭대기를 찾아 픽셀 뿔을 직접 그려 넣은 새 시트를 만든다.
+
+const RAGE_PAD = 9; // 뿔이 들어갈 위쪽 여백(px)
+const rageCache = new Map<string, HTMLCanvasElement>();
+
+function buildRage(key: SpriteKey, tier: number): HTMLCanvasElement {
+  const s: Spr = S[key];
+  const n = s.n ?? 1;
+  const W = s.w * n;
+  const H = s.h + RAGE_PAD;
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const c = cv.getContext('2d')!;
+  c.drawImage(sheet, s.x, s.y, W, s.h, 0, RAGE_PAD, W, s.h);
+  const img = c.getImageData(0, 0, W, H);
+  const d = img.data;
+  recolor(d, tier, true);
+
+  const ramp = RAGE_RAMP[tier];
+  const rgb = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const BONE = rgb('#ece0c8');
+  const BONE_D = rgb('#a89878');
+  const TIP = rgb(ramp[4]);
+  const OUT = [10, 4, 6];
+  const at = (x: number, y: number) => (y * W + x) * 4;
+  const opaque = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && d[at(x, y) + 3] > 0;
+  const horn = new Set<number>(); // 뿔 픽셀(외곽선을 따로 두르기 위해 기록)
+  const put = (x: number, y: number, col: number[]) => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    const i = at(x, y);
+    d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255;
+    horn.add(y * W + x);
+  };
+
+  for (let f = 0; f < n; f++) {
+    const x0 = f * s.w;
+    // 머리 꼭대기: 프레임 폭의 35% 이상 차는 첫 행(머리 위 새싹 같은 작은 장식은 건너뛴다)
+    let top = -1;
+    for (let y = 0; y < H && top < 0; y++) {
+      let cnt = 0;
+      for (let x = x0; x < x0 + s.w; x++) if (opaque(x, y)) cnt++;
+      if (cnt >= s.w * 0.35) top = y;
+    }
+    if (top < 0) continue;
+    let minX = x0 + s.w, maxX = x0;
+    for (let y = top; y < Math.min(H, top + 4); y++) {
+      for (let x = x0; x < x0 + s.w; x++) if (opaque(x, y)) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
+    }
+    const cx = (minX + maxX) / 2;
+    const half = Math.max(3, (maxX - minX) / 2);
+    // 머리 양쪽에서 바깥으로 휘어 올라가는 뿔(길이 8px, 밑동 2px 두께)
+    for (const side of [-1, 1]) {
+      const bx = Math.round(cx + side * half * 0.6);
+      const by = top + 2;
+      const L = 8;
+      for (let i = 0; i < L; i++) {
+        const y = by - i;
+        const x = bx + side * Math.round((i * i) / 12);
+        const col = i >= L - 2 ? TIP : i < 2 ? BONE_D : BONE;
+        put(x, y, col);
+        if (i < L - 3) put(x - side, y, i < 2 ? BONE_D : BONE); // 밑동은 두껍게
+      }
+    }
+  }
+  // 뿔 둘레에 도트 외곽선
+  for (const k of horn) {
+    const x = k % W, y = Math.floor(k / W);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H || horn.has(ny * W + nx)) continue;
+      const i = at(nx, ny);
+      if (d[i + 3] === 0) { d[i] = OUT[0]; d[i + 1] = OUT[1]; d[i + 2] = OUT[2]; d[i + 3] = 255; }
+    }
+  }
+  c.putImageData(img, 0, 0);
+  return cv;
+}
+
+/** 보스 2페이즈 모습으로 그린다(발 기준). 시트가 아직 없으면 false. */
+export function drawRage(c: CanvasRenderingContext2D, key: SpriteKey, tier: number, x: number, feetY: number, scale: number, o: DrawOpts = {}): boolean {
+  if (!spritesReady()) return false;
+  const id = `${key}:${tier}`;
+  let cv = rageCache.get(id);
+  if (!cv) {
+    cv = buildRage(key, tier);
+    rageCache.set(id, cv);
+  }
+  const s: Spr = S[key];
+  const h = s.h + RAGE_PAD;
+  c.save();
+  c.translate(x, feetY);
+  if (o.flip) c.scale(-1, 1);
+  c.imageSmoothingEnabled = false;
+  const src = o.flash && white ? white : cv;
+  if (src === cv) c.drawImage(cv, (o.frame ?? 0) * s.w, 0, s.w, h, (-s.w * scale) / 2, -h * scale, s.w * scale, h * scale);
+  else c.drawImage(src, s.x + (o.frame ?? 0) * s.w, s.y, s.w, s.h, (-s.w * scale) / 2, -s.h * scale, s.w * scale, s.h * scale);
+  c.restore();
+  return true;
 }
 
 /** 아이콘을 size 크기 상자 안에 맞춰 그린다. */
