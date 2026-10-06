@@ -102,6 +102,9 @@ interface Enemy {
   pattern: number;
   spiralT: number;
   act: number; // 보스가 공격할 때마다 늘어나는 번호(3D 공격 동작 재생용)
+  bphase: number; // 보스 페이즈(1, 2). 체력 50% 이하에서 2
+  phaseT: number; // 2페이즈로 넘어가는 포효 시간(이 동안 무적)
+  dashLeft: number; // 2페이즈 연속 돌진 남은 횟수
   actKind: 'attack' | 'summon';
   dead: boolean;
 }
@@ -198,6 +201,7 @@ export class Game {
   private guardT = 10; // 철벽 세트 보호막 주기
   private accelT = 0; // 가속 회로 지속 시간
   private bolts: { pts: { x: number; y: number }[]; t: number; life: number }[] = [];
+  private later: { t: number; fn: () => void }[] = []; // 잠시 뒤 실행할 일(보스 연속 탄막 등)
 
   private enemies: Enemy[] = [];
   private projs: Proj[] = [];
@@ -248,6 +252,7 @@ export class Game {
     this.projs = [];
     this.turrets = [];
     this.drops = [];
+    this.later = [];
     this.near = null;
     this.chest = isRewardRoom(n) ? { x: CHEST.x, y: CHEST.y, openT: -1, looted: false } : null;
     this.nearChest = false;
@@ -308,7 +313,7 @@ export class Game {
   private makeEnemy(kind: EnemyKind, x: number, y: number, hpMul: number): Enemy {
     const base = {
       id: this.nextId++, x, y, kx: 0, ky: 0, spawnT: 0.9, cd: rand(0.6, 1.6), state: 0, st: 0,
-      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, act: 0, actKind: 'attack' as const, dead: false,
+      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, act: 0, actKind: 'attack' as const, bphase: 1, phaseT: 0, dashLeft: 0, dead: false,
     };
     if (kind === 'boss') {
       const tier = Math.floor(this.room / BOSS_EVERY);
@@ -450,6 +455,12 @@ export class Game {
     }
 
     const slow = this.p.slowT > 0 ? 0.4 : 1;
+    if (this.later.length) {
+      for (const l of this.later) l.t -= dt * slow;
+      const due = this.later.filter((l) => l.t <= 0);
+      this.later = this.later.filter((l) => l.t > 0);
+      for (const l of due) l.fn();
+    }
     this.updatePlayer(dt);
     this.updateTurrets(dt);
     this.updateEnemies(dt, dt * slow);
@@ -1110,40 +1121,74 @@ export class Game {
     }
   }
 
+  /**
+   * 보스 패턴. 체력이 50% 이하가 되면 포효하며 2페이즈로 넘어가고, 1페이즈 패턴이 강화된다.
+   * - 원형 탄막: 탄 1.5배, 0.3초 뒤 엇갈린 두 번째 고리
+   * - 부채꼴 조준탄: 탄 +4, 0.22초 간격 3연사
+   * - 돌진(2단계 이상): 준비가 짧아지고 2연속, 돌진이 끝날 때마다 원형 탄막
+   * - 소환(1단계): 졸개 5마리와 함께 원형 탄막
+   * - 나선 탄막(3단계): 팔 4개, 더 촘촘하고 길게
+   * 공통: 이동 속도 +25%, 공격 간격 -30%
+   */
   private updateBoss(e: Enemy, dt: number, toP: number) {
+    if (e.bphase === 1 && e.hp <= e.maxHp * 0.5) this.enterPhase2(e);
+    if (e.phaseT > 0) {
+      e.phaseT -= dt;
+      return;
+    }
+    const p2 = e.bphase === 2;
     const bdmg = 10 + this.room * 0.4 + e.tier * 2;
+    const ring = (n: number, speed: number, off = rand(0, Math.PI)) => {
+      for (let i = 0; i < n; i++) this.enemyShot(e.x, e.y, off + (i * Math.PI * 2) / n, speed, bdmg);
+    };
     if (e.state === 0) {
-      e.x += Math.cos(toP) * e.speed * dt;
-      e.y += Math.sin(toP) * e.speed * dt;
+      const sp = e.speed * (p2 ? 1.25 : 1);
+      e.x += Math.cos(toP) * sp * dt;
+      e.y += Math.sin(toP) * sp * dt;
       if (e.spiralT > 0) {
         e.spiralT -= dt;
         e.st -= dt;
         if (e.st <= 0) {
-          e.st = 0.1;
-          const a = e.pattern * 0.5;
+          e.st = p2 ? 0.08 : 0.1;
+          const a = e.pattern * (p2 ? 0.4 : 0.5);
           e.pattern++;
-          for (let k = 0; k < 2; k++) this.enemyShot(e.x, e.y, a + k * Math.PI, 190, bdmg);
+          const arms = p2 ? 4 : 2;
+          for (let k = 0; k < arms; k++) this.enemyShot(e.x, e.y, a + (k * Math.PI * 2) / arms, p2 ? 210 : 190, bdmg);
         }
       }
       if (e.cd <= 0 && e.spiralT <= 0) {
-        e.cd = 2.2 - e.tier * 0.25;
+        e.cd = (2.2 - e.tier * 0.25) * (p2 ? 0.7 : 1);
         const choice = Math.floor(Math.random() * (e.tier >= 3 ? 4 : e.tier >= 2 ? 3 : 2));
         if (choice !== 2 || e.tier < 2) {
           e.act++;
           e.actKind = choice === 2 ? 'summon' : 'attack';
         }
         if (choice === 0) {
-          const n = 10 + e.tier * 4;
+          const n = Math.round((10 + e.tier * 4) * (p2 ? 1.5 : 1));
           const off = rand(0, Math.PI);
-          for (let i = 0; i < n; i++) this.enemyShot(e.x, e.y, off + (i * Math.PI * 2) / n, 170, bdmg);
+          ring(n, 170, off);
+          if (p2) this.later.push({ t: 0.3, fn: () => { if (!e.dead) ring(n, 210, off + Math.PI / n); } });
         } else if (choice === 1) {
-          const n = 3 + e.tier * 2;
-          for (let i = 0; i < n; i++) this.enemyShot(e.x, e.y, toP + (i - (n - 1) / 2) * 0.16, 260, bdmg);
+          const n = 3 + e.tier * 2 + (p2 ? 4 : 0);
+          const fan = () => {
+            const a0 = Math.atan2(this.p.y - e.y, this.p.x - e.x);
+            for (let i = 0; i < n; i++) this.enemyShot(e.x, e.y, a0 + (i - (n - 1) / 2) * (p2 ? 0.12 : 0.16), 260, bdmg);
+          };
+          fan();
+          if (p2) for (const t of [0.22, 0.44]) this.later.push({ t, fn: () => { if (!e.dead) fan(); } });
         } else if (choice === 2) {
-          if (e.tier >= 2) { e.state = 1; e.st = 0.8; e.dx = Math.cos(toP); e.dy = Math.sin(toP); }
-          else this.summon(e, 'grunt', 3);
+          if (e.tier >= 2) {
+            e.state = 1;
+            e.st = p2 ? 0.55 : 0.8;
+            e.dx = Math.cos(toP);
+            e.dy = Math.sin(toP);
+            e.dashLeft = p2 ? 1 : 0;
+          } else {
+            this.summon(e, 'grunt', p2 ? 5 : 3);
+            if (p2) ring(10, 160);
+          }
         } else {
-          e.spiralT = 2.2;
+          e.spiralT = p2 ? 3 : 2.2;
           e.st = 0;
         }
       }
@@ -1152,9 +1197,45 @@ export class Game {
       if (e.st <= 0) { e.state = 2; e.st = 0.7; }
     } else if (e.state === 2) {
       e.st -= dt;
-      e.x += e.dx * 420 * dt;
-      e.y += e.dy * 420 * dt;
-      if (e.st <= 0) { e.state = 0; }
+      const sp = p2 ? 520 : 420;
+      e.x += e.dx * sp * dt;
+      e.y += e.dy * sp * dt;
+      if (e.st <= 0) {
+        if (p2) ring(12, 180);
+        if (e.dashLeft > 0) {
+          // 2페이즈: 플레이어 쪽으로 다시 겨눠 한 번 더 돌진
+          e.dashLeft--;
+          e.state = 1;
+          e.st = 0.4;
+          e.dx = Math.cos(toP);
+          e.dy = Math.sin(toP);
+        } else {
+          e.state = 0;
+        }
+      }
+    }
+  }
+
+  /** 2페이즈 진입: 포효(무적)하며 적 탄을 지우고 플레이어를 밀어낸다. */
+  private enterPhase2(e: Enemy) {
+    e.bphase = 2;
+    e.phaseT = 1.6;
+    e.state = 0;
+    e.spiralT = 0;
+    e.dashLeft = 0;
+    e.cd = 0.8;
+    this.projs = this.projs.filter((q) => q.friendly);
+    this.shake = Math.max(this.shake, 14);
+    const color = ['', '#ff5a20', '#b040ff', '#ff1040'][e.tier];
+    this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.6, r: 220, color });
+    this.fx.push({ kind: 'ring', x: e.x, y: e.y, t: 0, life: 0.9, r: 320, color });
+    this.burst(e.x, e.y - 20, 50, color, 300, { size: 4, life: 0.9, grav: -40 });
+    this.fx.push({ kind: 'text', x: W / 2, y: H / 2 - 30, t: 0, life: 2.2, big: true, text: `${BOSS_NAME[e.tier]}의 분노`, color });
+    const p = this.p;
+    const a = Math.atan2(p.y - e.y, p.x - e.x);
+    if (dist(p.x, p.y, e.x, e.y) < 220) {
+      p.x = clamp(p.x + Math.cos(a) * 110, WALL + p.r, W - WALL - p.r);
+      p.y = clamp(p.y + Math.sin(a) * 110, TOP + p.r, H - WALL - p.r);
     }
   }
 
@@ -1247,6 +1328,7 @@ export class Game {
    */
   private hurtEnemy(e: Enemy, base: number, fromPlayer: boolean, proc = false) {
     if (e.dead) return;
+    if (e.phaseT > 0) return; // 2페이즈 포효 중에는 무적
     let d = base;
     let crit = false;
     if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) {
@@ -1504,8 +1586,28 @@ export class Game {
           anchor: 'feet',
           frame: animFrame(key, this.time + e.id * 0.37, e.state !== 1),
           flip: this.p.x < e.x,
-          flash: e.flash > 0 || e.state === 1,
+          flash: e.flash > 0 || e.state === 1 || (e.phaseT > 0 && Math.sin(this.time * 40) > 0.3),
         });
+        if (e.kind === 'boss' && e.bphase === 2) {
+          // 3D를 못 쓸 때의 2페이즈 모습: 붉은 기운과 머리 위 뿔
+          const top = feet - S[key].h * scale;
+          c.save();
+          c.globalCompositeOperation = 'lighter';
+          c.fillStyle = `rgba(255, 40, 60, ${0.18 + 0.1 * Math.sin(this.time * 6)})`;
+          c.beginPath();
+          c.ellipse(e.x, feet - (S[key].h * scale) / 2, e.r * 1.4, (S[key].h * scale) / 2, 0, 0, Math.PI * 2);
+          c.fill();
+          c.restore();
+          c.fillStyle = '#2a0608';
+          for (const side of [-1, 1]) {
+            c.beginPath();
+            c.moveTo(e.x + side * e.r * 0.35, top + 10);
+            c.lineTo(e.x + side * e.r * 0.75, top - 18);
+            c.lineTo(e.x + side * e.r * 0.15, top + 6);
+            c.closePath();
+            c.fill();
+          }
+        }
       }
       if (e.kind !== 'boss' && e.hp < e.maxHp) {
         const top = feet - S[key].h * scale - 6;
@@ -2014,7 +2116,7 @@ export class Game {
     return {
       x: e.x, y: e.y + e.r, r: e.r, tier: e.tier, spawnT: e.spawnT, state: e.state, spiralT: e.spiralT, flash: e.flash,
       faceX: dash ? e.dx : this.p.x - e.x, faceY: dash ? e.dy : this.p.y - e.y,
-      act: e.act, actKind: e.actKind,
+      act: e.act, actKind: e.actKind, phase2: e.bphase === 2, roar: e.phaseT > 0,
     };
   }
 
@@ -2279,9 +2381,15 @@ export class Game {
       this.panel(c, bx - 8, by - 6, bw + 16, 40);
       c.textAlign = 'center';
       c.font = this.font(16);
-      c.fillStyle = '#ff9a7a';
-      c.fillText(BOSS_NAME[boss.tier], W / 2, by + 10);
-      this.gauge(c, bx, by + 16, bw, 12, Math.max(0, boss.hp / boss.maxHp), '#e04a3a', '#701010');
+      const p2 = boss.bphase === 2;
+      c.fillStyle = p2 ? '#ff5a5a' : '#ff9a7a';
+      c.fillText(p2 ? `${BOSS_NAME[boss.tier]} · 분노` : BOSS_NAME[boss.tier], W / 2, by + 10);
+      this.gauge(c, bx, by + 16, bw, 12, Math.max(0, boss.hp / boss.maxHp), p2 ? '#ff2a5a' : '#e04a3a', p2 ? '#600020' : '#701010');
+      if (!p2) {
+        // 2페이즈 기준선(50%)
+        c.fillStyle = '#ffd27a';
+        c.fillRect(bx + bw / 2 - 1, by + 14, 2, 16);
+      }
     }
 
     this.renderGearHud(c);

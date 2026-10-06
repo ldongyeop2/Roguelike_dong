@@ -18,6 +18,8 @@ export interface BossPose {
   faceY: number;
   act: number; // 공격할 때마다 1씩 늘어나는 번호
   actKind: 'attack' | 'summon';
+  phase2: boolean; // 체력 50% 이하: 뿔이 돋고 몸이 붉게 타오른다
+  roar: boolean; // 2페이즈로 넘어가며 포효하는 중
 }
 
 interface Model {
@@ -29,6 +31,9 @@ interface Model {
   oneShot: THREE.AnimationAction | null;
   lastAct: number;
   yaw: number;
+  head: THREE.Object3D | null; // 뿔이 따라갈 머리 뼈
+  horns: THREE.Group; // 2페이즈 뿔
+  hornUp: number; // 머리 뼈에서 뿔까지 높이
 }
 
 const RES = 112; // 3D 렌더 해상도(px). 화면에서는 2.5~3배로 확대된다.
@@ -40,6 +45,19 @@ const TINT: Record<number, { eye: number; body: number; bodyI: number }> = {
   1: { eye: 0xff5a3a, body: 0x000000, bodyI: 0 },
   2: { eye: 0xc070ff, body: 0x2a0a40, bodyI: 0.35 },
   3: { eye: 0xff2050, body: 0x3a0010, bodyI: 0.5 },
+};
+// 2페이즈 색: 몸 전체가 이 색으로 타오르고 눈빛이 강해진다.
+const RAGE: Record<number, { body: number; eye: number; horn: number }> = {
+  1: { body: 0xff3a10, eye: 0xffd040, horn: 0x7a2a10 },
+  2: { body: 0x9a20ff, eye: 0xff60ff, horn: 0x4a1a80 },
+  3: { body: 0xff0030, eye: 0xffffff, horn: 0x6a0a20 },
+};
+const PHASE2_SCALE = 1.15;
+/** 뿔 모양(모델 키 = 1): 머리 뼈 기준 높이, 좌우 간격, 길이. 투구, 두건, 모자 밖으로 나오게 단계별로 맞춘다. */
+const HORN: Record<number, { up: number; spread: number; len: number }> = {
+  1: { up: 0.25, spread: 0.06, len: 0.3 },
+  2: { up: 0.24, spread: 0.11, len: 0.32 },
+  3: { up: 0.22, spread: 0.11, len: 0.34 },
 };
 
 class Boss3D {
@@ -126,7 +144,34 @@ class Boss3D {
     const mixer = new THREE.AnimationMixer(root);
     const clips = new Map<string, THREE.AnimationAction>();
     for (const clip of g.animations) clips.set(clip.name, mixer.clipAction(clip));
-    this.models.set(tier, { root: holder, mixer, clips, mats, loop: '', oneShot: null, lastAct: 0, yaw: 0 });
+
+    // 2페이즈 뿔: 머리 위에서 바깥쪽으로 휘어 솟은 원뿔 두 개. 머리 뼈 위치를 매 프레임 따라간다.
+    const head = root.getObjectByName('head') ?? null;
+    const horns = new THREE.Group();
+    const rage = RAGE[tier];
+    const hs = HORN[tier];
+    // 뿔 밑동은 짙은 단계 색, 끝은 밝게 빛나게 해서 붉게 물든 몸과 구분되게 한다.
+    const hornMat = new THREE.MeshStandardMaterial({ color: rage.horn, emissive: new THREE.Color(rage.horn), emissiveIntensity: 0.4, roughness: 0.5 });
+    const tipMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(rage.eye), emissiveIntensity: 1.5 });
+    for (const side of [-1, 1]) {
+      const cone = new THREE.Group();
+      const baseH = hs.len * 0.75;
+      const base = new THREE.Mesh(new THREE.ConeGeometry(0.085, baseH, 6), hornMat);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.085 * 0.35, hs.len * 0.3, 6), tipMat);
+      base.position.y = baseH / 2;
+      tip.position.y = baseH + hs.len * 0.1;
+      base.frustumCulled = false;
+      tip.frustumCulled = false;
+      cone.add(base, tip);
+      cone.position.set(side * hs.spread, 0, 0.02);
+      cone.rotation.z = -side * 0.55;
+      cone.rotation.x = -0.25;
+      horns.add(cone);
+    }
+    horns.visible = false;
+    holder.add(horns);
+    const hornUp = hs.up;
+    this.models.set(tier, { root: holder, mixer, clips, mats, loop: '', oneShot: null, lastAct: 0, yaw: 0, head, horns, hornUp });
   }
 
   /** 모델이 준비됐는지. 아니면 게임이 2D 그림으로 대신 그린다. */
@@ -181,9 +226,9 @@ class Boss3D {
         m.lastAct = p.act;
         this.once(m, p.actKind === 'summon' ? 'Spellcast_Summon' : ATTACK[p.tier] ?? ATTACK[1], 0.55);
       }
-      const loop = p.state === 1 ? 'Taunt' : p.state === 2 ? 'Running_A' : p.spiralT > 0 ? 'Spellcasting' : 'Walking_A';
+      const loop = p.roar || p.state === 1 ? 'Taunt' : p.state === 2 ? 'Running_A' : p.spiralT > 0 ? 'Spellcasting' : 'Walking_A';
       this.play(m, loop);
-      m.clips.get(loop)!.timeScale = loop === 'Walking_A' ? 1.1 : 1;
+      m.clips.get(loop)!.timeScale = loop === 'Walking_A' ? (p.phase2 ? 1.4 : 1.1) : 1;
       if (m.oneShot && !m.oneShot.isRunning()) {
         m.oneShot.fadeOut(0.15);
         m.oneShot = null;
@@ -205,14 +250,30 @@ class Boss3D {
 
   private renderModel(c: CanvasRenderingContext2D, m: Model, p: BossPose, alpha: number) {
     const flash = p.flash > 0 || p.state === 1;
+    const now = performance.now();
+    const rage = RAGE[p.tier];
     for (const mat of m.mats) {
-      if (flash) {
+      const glow = mat.name === 'Glow';
+      if (flash || (p.roar && Math.sin(now / 45) > 0.3)) {
         mat.emissive.setRGB(1, 1, 1);
-        mat.emissiveIntensity = p.state === 1 ? 0.35 + 0.25 * Math.sin(performance.now() / 50) : 0.8;
+        mat.emissiveIntensity = p.state === 1 ? 0.35 + 0.25 * Math.sin(now / 50) : 0.8;
+      } else if (p.phase2) {
+        // 2페이즈: 몸이 단계 색으로 맥동하며 타오른다.
+        mat.emissive.setHex(glow ? rage.eye : rage.body);
+        mat.emissiveIntensity = glow ? 4 : 0.28 + 0.12 * Math.sin(now / 160);
       } else {
         mat.emissive.copy(mat.userData.baseE);
         mat.emissiveIntensity = mat.userData.baseI;
       }
+    }
+    // 뿔은 머리 뼈 위치를 따라간다(몸 방향은 holder가 돌려 준다).
+    m.horns.visible = p.phase2;
+    if (p.phase2 && m.head) {
+      m.root.updateMatrixWorld(true);
+      const v = new THREE.Vector3();
+      m.head.getWorldPosition(v);
+      m.root.worldToLocal(v);
+      m.horns.position.set(v.x, v.y + m.hornUp, v.z);
     }
     for (const o of this.models.values()) o.root.visible = o === m;
     const r = this.renderer!;
@@ -225,7 +286,7 @@ class Boss3D {
     for (let y = 0; y < RES; y++) this.img.data.set(this.pixels.subarray((RES - 1 - y) * row, (RES - y) * row), y * row);
     this.pix.getContext('2d')!.putImageData(this.img, 0, 0);
 
-    const unit = p.r * 4.8; // 모델 키(1)를 화면 px로
+    const unit = p.r * 4.8 * (p.phase2 ? PHASE2_SCALE : 1); // 모델 키(1)를 화면 px로
     const size = VIEW * unit;
     const dx = p.x - size / 2;
     const dy = p.y - size * (1 - this.feetFrac);
