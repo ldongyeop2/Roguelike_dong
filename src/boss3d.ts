@@ -1,9 +1,25 @@
 // 보스만 3D 모델로 그린다. 게임 로직은 2D 그대로 두고, 보이지 않는 WebGL 캔버스에
 // 보스를 낮은 해상도로 렌더링한 뒤 2D 화면의 보스 위치에 픽셀 느낌으로 확대해 붙인다.
-// 모델: KayKit Character Pack Skeletons (Kay Lousberg, CC0). public/models/boss*.json (glTF)
+// 모델: KayKit Character Pack Skeletons (Kay Lousberg, CC0). src/assets/models/boss*.glb
+// 호스팅 환경이 fetch를 막을 수 있어서 모델은 코드에 직접 넣고(?inline) 직접 디코드한다.
+// 텍스처는 스프라이트 시트처럼 이미지로 불러와 입힌다.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RAGE_EYE, RAGE_RAMP, recolor } from './rage';
+import boss1Url from './assets/models/boss1.glb?inline';
+import boss2Url from './assets/models/boss2.glb?inline';
+import boss3Url from './assets/models/boss3.glb?inline';
+import texUrl from './assets/models/skeleton_texture.png';
+
+const MODEL_DATA: Record<number, string> = { 1: boss1Url, 2: boss2Url, 3: boss3Url };
+
+/** data URI의 base64를 fetch 없이 바이트로 바꾼다. */
+function decodeDataUrl(url: string): ArrayBuffer {
+  const bin = atob(url.slice(url.indexOf(',') + 1));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
 
 /** 보스 동작. 게임이 넘겨 주는 상태를 보고 애니메이션을 고른다. */
 export interface BossPose {
@@ -103,11 +119,26 @@ class Boss3D {
       this.renderer = null; // WebGL을 못 쓰면 2D 보스로 그린다.
       return;
     }
-    const loader = new GLTFLoader();
-    for (const tier of [1, 2, 3]) {
-      loader.load(`models/boss${tier}.json`, (g) => this.addModel(tier, g), undefined, () => {});
-    }
+    const im = new Image();
+    im.onload = () => {
+      this.texture = new THREE.Texture(im);
+      this.texture.flipY = false; // glTF 텍스처 좌표 규칙
+      this.texture.colorSpace = THREE.SRGBColorSpace;
+      this.texture.needsUpdate = true;
+      const loader = new GLTFLoader();
+      for (const tier of [1, 2, 3]) {
+        try {
+          loader.parse(decodeDataUrl(MODEL_DATA[tier]), '', (g) => this.addModel(tier, g), (err) => console.warn('boss model', tier, err));
+        } catch (err) {
+          console.warn('boss model', tier, err);
+        }
+      }
+    };
+    im.onerror = () => console.warn('boss texture failed to load');
+    im.src = texUrl;
   }
+
+  private texture: THREE.Texture | null = null;
 
   private addModel(tier: number, g: { scene: THREE.Object3D; animations: THREE.AnimationClip[] }) {
     const root = g.scene;
@@ -133,6 +164,11 @@ class Boss3D {
       m.emissiveIntensity = glow ? 2.5 : tint.bodyI;
       m.userData.baseE = m.emissive.clone();
       m.userData.baseI = m.emissiveIntensity;
+      if (!glow && this.texture) {
+        m.map = this.texture;
+        m.color.setRGB(1, 1, 1);
+        m.needsUpdate = true;
+      }
       m.userData.baseMap = m.map;
       mesh.material = m;
       mats.push(m);
