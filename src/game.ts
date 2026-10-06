@@ -43,9 +43,13 @@ const DROP_CHANCE: Record<EnemyKind, number> = {
   grunt: 0.04, archer: 0.04, swarm: 0.015, charger: 0.06, brute: 0.15, boss: 1,
 };
 /** 무기 종류별 휘두르기 애니메이션 길이(초) */
-const SWING_TIME: Record<WeaponKind, number> = {
-  slash: 0.16, thrust: 0.14, smash: 0.24, bow: 0.18, staff: 0.2, fist: 0.1, whip: 0.32,
+const SWING_TIME: Record<AttackKind, number> = {
+  slash: 0.16, thrust: 0.14, smash: 0.24, bow: 0.18, staff: 0.2, fist: 0.1, whip: 0.32, spin: 0.3, throw: 0.16,
 };
+/** 아이템으로 바뀐 실제 공격 방식. spin: 360도 회전 베기, throw: 무기 던지기 */
+type AttackKind = WeaponKind | 'spin' | 'throw';
+/** 현재 무기와 아이템으로 정해지는 공격 방식과 배율 */
+interface AttackForm { kind: AttackKind; arc: number; range: number; dmg: number; knock: number; rate: number }
 const EXIT = { x: W / 2, y: TOP + 18 }; // 방 클리어 후 나타나는 출구(사다리)
 const CHEST = { x: W / 2 + 190, y: TOP + 170 }; // 보물 방 상자 위치(사다리 가는 길을 막지 않게 오른쪽)
 const CHEST_OPEN_T = 0.45; // 상자 여는 연출 길이(초)
@@ -110,6 +114,7 @@ interface Proj {
   hit: Set<number>;
   color: string;
   sprite?: SpriteKey;
+  icon?: IconRef; // 던진 무기: 빙글빙글 돌며 날아간다
   proc?: boolean; // 다른 효과로 생긴 투사체(연쇄 발동 방지)
   boom?: boolean; // 맞으면 작게 폭발
   glow?: string; // 원소 색 빛
@@ -128,6 +133,7 @@ export interface Card {
   kind: 'item' | 'skill' | 'heal';
   tags?: Tag[];
   hint?: string; // 이 카드를 고르면 발동하는 시너지
+  cost?: string; // 제약(대가)
   id: string;
   name: string;
   desc: string;
@@ -366,7 +372,7 @@ export class Game {
         const next = activeSynergies(this.synItems(i.id), this.tagsOf);
         const gained = [...next].filter((x) => !this.syn.has(x)).map((x) => SYN_NAME.get(x));
         cards.push({
-          kind: 'item', id: i.id, sprite: i.sprite, name: i.name, desc: i.desc, tags: i.tags,
+          kind: 'item', id: i.id, sprite: i.sprite, name: i.name, desc: i.desc, tags: i.tags, cost: i.cost,
           hint: gained.length ? gained.join(', ') : undefined,
         });
       }
@@ -498,7 +504,37 @@ export class Game {
   }
 
   private heal(v: number) {
-    this.p.hp = Math.min(this.p.maxHp, this.p.hp + v);
+    this.p.hp = Math.min(this.p.maxHp, this.p.hp + v * this.m.healMul);
+  }
+
+  /**
+   * 아이템으로 바뀐 공격 방식. 근접 무기는 찌르기 교본 → 무거운 추 → 회오리 손잡이 → 투척 장갑 순으로 덮어쓴다.
+   * 원거리 무기는 저격 조준경, 과부하 수정이 공격 속도를 낮춘다(투사체 변화는 attack에서 적용).
+   */
+  private form(): AttackForm {
+    const b = this.weapon.base;
+    const m = this.m;
+    const ranged = b.wkind === 'bow' || b.wkind === 'staff';
+    const f: AttackForm = { kind: b.wkind, arc: b.arc, range: b.range + m.extra * 16, dmg: 1, knock: 1, rate: 1 };
+    if (ranged) {
+      if (m.scope > 0) f.rate *= 0.6;
+      if (m.overload > 0) f.rate *= 0.6;
+      return f;
+    }
+    if (m.formThrust > 0 && b.wkind === 'slash') {
+      f.kind = 'thrust'; f.arc = 0.55; f.range *= 1.3; f.dmg *= 1.4;
+    }
+    if (m.formSmash > 0) {
+      f.kind = 'smash'; f.arc = Math.max(b.arc, 2.2); f.dmg *= 1.5; f.knock *= 2; f.rate *= 0.7;
+    }
+    if (m.formSpin > 0 && (f.kind === 'slash' || f.kind === 'smash')) {
+      f.kind = 'spin'; f.arc = Math.PI * 2; f.dmg *= 0.75; f.rate *= 0.85;
+    }
+    if (m.formThrow > 0) {
+      f.kind = 'throw'; f.dmg *= 1.2; f.rate *= 0.8;
+    }
+    f.range *= m.meleeRange * (this.has('set:shot') ? 1.2 : 1);
+    return f;
   }
 
   /** 장비 능력치 합계를 다시 계산하고 최대 체력을 반영한다. 최대 체력이 늘면 그만큼 회복. */
@@ -797,7 +833,7 @@ export class Game {
 
     if (this.input.takeSkill() && p.skillId && p.skillCd <= 0) this.useSkill();
 
-    let rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1);
+    let rate = this.m.rate * (1 + this.gs.rate) * (p.rageT > 0 ? 1.5 : 1) * this.form().rate;
     if (this.has('set:swift') && p.moving) rate *= 1.2;
     if (this.accelT > 0) rate *= 1.5;
     this.accelT = Math.max(0, this.accelT - dt);
@@ -861,65 +897,82 @@ export class Game {
     }
   }
 
-  /** 장착한 무기로 공격한다. 무기 종류마다 판정과 휘두르는 모션이 다르다. */
+  /** 장착한 무기로 공격한다. 무기 종류(와 아이템으로 바뀐 공격 방식)마다 판정과 휘두르는 모션이 다르다. */
   private attack(interval: number) {
     const p = this.p;
     const w = this.weapon;
     const b = w.base;
     const m = this.m;
-    const dmg = w.dmg * this.dmgMul();
-    p.swingDur = Math.min(SWING_TIME[b.wkind], interval * 0.9);
+    const f = this.form();
+    const dmg = w.dmg * this.dmgMul() * f.dmg;
+    p.swingDur = Math.min(SWING_TIME[f.kind], interval * 0.9);
     p.swingT = p.swingDur;
     p.swingAim = p.aim;
     p.swingDir = -p.swingDir; // 베기는 좌우를 번갈아 휘두른다
     this.attackCount++;
     if (this.has('set:blade') && this.attackCount % 4 === 0) this.shards(p.x, p.y, 8, w.dmg * 0.5 * this.dmgMul(), this.has('chain_blast'));
 
-    if (b.wkind === 'bow' || b.wkind === 'staff') {
-      const bow = b.wkind === 'bow';
-      const count = 1 + Math.floor(m.extra) + (this.has('tracking') ? 1 : 0);
+    if (f.kind === 'bow' || f.kind === 'staff') {
+      const bow = f.kind === 'bow';
+      const scatter = m.scatter > 0;
+      const count = 1 + Math.floor(m.extra) + (this.has('tracking') ? 1 : 0) + m.scatter * 3;
       const sharp = this.has('set:shot');
       const elem = this.elementColor();
-      const step = bow ? 0.12 : 0.18;
-      const speed = (bow ? 560 : 380) * (sharp ? 1.3 : 1);
+      const step = scatter ? 0.16 : bow ? 0.12 : 0.18;
+      const speed = (bow ? 560 : 380) * (sharp ? 1.3 : 1) * (m.scope > 0 ? 2 : 1);
+      const pdmg = dmg * (scatter ? 0.55 : 1) * (m.scope > 0 ? 1.5 : 1);
+      const big = m.overload > 0 ? 2 : 1;
       for (let i = 0; i < count; i++) {
         const a = p.aim + (i - (count - 1) / 2) * step;
         this.projs.push({
           x: p.x + Math.cos(a) * 18, y: p.y - 6 + Math.sin(a) * 18,
           vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
-          r: bow ? 4 : 9, dmg, life: bow ? 1.2 : 1.6, friendly: true,
-          pierce: m.pierce + (bow ? 0 : 2) + (sharp ? 1 : 0), bounce: m.bounce, hit: new Set(),
-          color: elem ?? (b.id === 'staff_green' ? '#7ee08a' : '#b49cff'), glow: elem,
-          sprite: bow ? 'w_arrow' : undefined,
+          r: (bow ? 4 : 9) * big, dmg: pdmg, life: (bow ? 1.2 : 1.6) * (scatter ? 0.6 : 1) / (m.scope > 0 ? 1.4 : 1), friendly: true,
+          pierce: m.pierce + (bow ? 0 : 2) + (sharp ? 1 : 0) + (m.scope > 0 ? 2 : 0), bounce: m.bounce, hit: new Set(),
+          color: elem ?? (m.overload > 0 ? '#ff8a4a' : b.id === 'staff_green' ? '#7ee08a' : '#b49cff'), glow: elem ?? (m.overload > 0 ? '#ff8a4a' : undefined),
+          sprite: bow && big === 1 ? 'w_arrow' : undefined, boom: m.overload > 0,
         });
       }
       return;
     }
 
-    const range = (b.range + m.extra * 16) * (this.has('set:shot') ? 1.2 : 1);
+    const range = f.range;
     const ax = Math.cos(p.aim);
     const ay = Math.sin(p.aim);
+    if (f.kind === 'throw') {
+      // 던진 무기: 근접 판정 대신 관통 투사체
+      const sp = 520;
+      this.projs.push({
+        x: p.x + ax * 16, y: p.y - 6 + ay * 16, vx: ax * sp, vy: ay * sp, r: 11, dmg,
+        life: (range * 2.6) / sp, friendly: true, pierce: 1 + m.pierce, bounce: m.bounce, hit: new Set(),
+        color: '#e8e0d0', glow: this.elementColor(), icon: b.sprite,
+      });
+      return;
+    }
     for (const e of this.enemies) {
       if (e.spawnT > 0 || e.dead) continue;
       if (dist(e.x, e.y, p.x, p.y) > range + e.r) continue;
-      if (angDiff(Math.atan2(e.y - p.y, e.x - p.x), p.aim) > b.arc / 2 + 0.15) continue;
+      if (f.kind !== 'spin' && angDiff(Math.atan2(e.y - p.y, e.x - p.x), p.aim) > f.arc / 2 + 0.15) continue;
       this.hurtEnemy(e, dmg, true);
-      e.kx += ax * b.knock;
-      e.ky += ay * b.knock;
+      // 회전 베기는 바깥쪽으로 밀어낸다.
+      const ka = f.kind === 'spin' ? Math.atan2(e.y - p.y, e.x - p.x) : p.aim;
+      e.kx += Math.cos(ka) * b.knock * f.knock;
+      e.ky += Math.sin(ka) * b.knock * f.knock;
     }
-    if (b.wkind === 'slash' || b.wkind === 'smash') {
-      // 베기와 내려치기는 범위 안의 적 투사체를 쳐낸다.
+    if (f.kind === 'slash' || f.kind === 'smash' || f.kind === 'spin') {
+      // 베기, 내려치기, 회전 베기는 범위 안의 적 투사체를 쳐낸다.
       this.projs = this.projs.filter((q) => {
         if (q.friendly) return true;
         const d = dist(q.x, q.y, p.x, p.y);
-        return !(d < range && angDiff(Math.atan2(q.y - p.y, q.x - p.x), p.aim) < b.arc / 2);
+        return !(d < range && (f.kind === 'spin' || angDiff(Math.atan2(q.y - p.y, q.x - p.x), p.aim) < f.arc / 2));
       });
     }
-    if (b.wkind === 'smash') {
+    if (f.kind === 'smash') {
       this.shake = Math.max(this.shake, 3);
       this.burst(p.x + ax * range * 0.7, p.y + ay * range * 0.7, 8, '#bfae94', 120, { size: 3, life: 0.4, glow: false });
       this.fx.push({ kind: 'ring', x: p.x + ax * range * 0.7, y: p.y + ay * range * 0.7, t: 0, life: 0.25, r: 34, color: '#e8d8b0' });
     }
+    if (f.kind === 'spin') this.fx.push({ kind: 'ring', x: p.x, y: p.y, t: 0, life: 0.28, r: range, color: this.elementColor() ?? '#f0e6d4' });
   }
 
   private updateTurrets(dt: number) {
@@ -1196,7 +1249,12 @@ export class Game {
     if (e.dead) return;
     let d = base;
     let crit = false;
-    if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) { d *= this.has('execute') ? 3 : 2; crit = true; }
+    if (fromPlayer && Math.random() < this.m.crit + this.gs.crit) {
+      d *= 2 + (this.has('execute') ? 1 : 0) + (this.m.dice > 0 ? 1 : 0);
+      crit = true;
+    } else if (fromPlayer && this.m.dice > 0) {
+      d *= 0.7; // 도박꾼의 주사위: 치명타가 아니면 약해진다.
+    }
     e.hp -= d;
     e.flash = 0.1;
     if (fromPlayer) {
@@ -1282,7 +1340,7 @@ export class Game {
     }
     // 방어: 방어 수치 a에 대해 a / (a + 15) 비율만큼 피해 감소
     const armor = this.gs.armor;
-    const taken = Math.max(1, dmg * (1 - armor / (armor + 15)));
+    const taken = Math.max(1, dmg * (1 - armor / (armor + 15)) * this.m.dmgTaken);
     p.hp -= taken;
     p.invuln = 0.7;
     this.shake = Math.max(this.shake, 7);
@@ -1466,6 +1524,20 @@ export class Game {
         c.beginPath();
         c.arc(q.x, q.y, 9, 0, Math.PI * 2);
         c.fill();
+      }
+      if (q.icon !== undefined) {
+        // 던진 무기는 돌면서 날아간다.
+        const rot = this.time * 22;
+        if (isGenKey(q.icon)) {
+          c.save();
+          c.translate(q.x, q.y);
+          c.rotate(rot);
+          drawIcon(c, q.icon, 0, 0, 22);
+          c.restore();
+        } else {
+          drawSprite(c, q.icon, q.x, q.y, 1.6, { rot });
+        }
+        continue;
       }
       if (q.sprite !== undefined) {
         // 무기 스프라이트는 위쪽을 향하므로 진행 방향에 맞춰 90도 보정한다.
@@ -1690,38 +1762,41 @@ export class Game {
   private renderWeapon(c: CanvasRenderingContext2D) {
     const p = this.p;
     const b = this.weapon.base;
+    const f = this.form();
+    const kind = f.kind;
     const swinging = p.swingT > 0;
     const t = swinging ? 1 - p.swingT / p.swingDur : 1;
     const hx = p.x;
     const hy = p.y - 8;
     let ang = p.aim;
     let reach = 10;
+    if (kind === 'throw' && swinging) return; // 던진 무기는 손에 없다.
 
-    if (b.wkind === 'slash' || b.wkind === 'smash' || b.wkind === 'staff') {
-      const arc = b.wkind === 'staff' ? 1.2 : Math.max(b.arc, 1.4);
-      const k = b.wkind === 'smash' ? t * t : easeOut(t);
+    if (kind === 'slash' || kind === 'smash' || kind === 'staff' || kind === 'spin' || kind === 'throw') {
+      const arc = kind === 'staff' ? 1.2 : kind === 'spin' ? Math.PI * 2 : Math.max(f.arc, 1.4);
+      const k = kind === 'smash' ? t * t : easeOut(t);
       const base = swinging ? p.swingAim : p.aim;
       ang = base + p.swingDir * (-arc / 2 + arc * k);
       if (!swinging) ang = p.aim + p.swingDir * 0.5; // 대기 자세: 조준 방향 옆으로 든다
-      if (swinging && b.wkind !== 'staff') {
+      if (swinging && kind !== 'staff') {
         // 휘두른 궤적
-        const r = (b.range + this.m.extra * 16) * 0.8;
+        const r = f.range * 0.8;
         const a0 = p.swingAim - p.swingDir * arc / 2;
         const ec = this.elementColor();
         c.globalAlpha = 0.35 * (1 - t * 0.5) * (ec ? 1.6 : 1);
         c.strokeStyle = ec ?? '#ffffff';
-        c.lineWidth = b.wkind === 'smash' ? 14 : 9;
+        c.lineWidth = kind === 'smash' ? 14 : 9;
         c.beginPath();
         c.arc(hx, hy, r, Math.min(a0, ang), Math.max(a0, ang));
         c.stroke();
         c.globalAlpha = 1;
       }
-    } else if (b.wkind === 'thrust') {
+    } else if (kind === 'thrust') {
       reach += swinging ? Math.sin(t * Math.PI) * 26 : 0;
-    } else if (b.wkind === 'fist') {
+    } else if (kind === 'fist') {
       this.renderFist(c, swinging, t, hx, hy);
       return;
-    } else if (b.wkind === 'whip') {
+    } else if (kind === 'whip') {
       this.renderWhip(c, swinging, t, hx, hy);
       return;
     } else {
@@ -1732,7 +1807,7 @@ export class Game {
     const py = hy + Math.sin(ang) * reach;
     if (isGenKey(b.sprite)) {
       drawIcon(c, b.sprite, px, py, 20);
-    } else if (b.wkind === 'bow') {
+    } else if (kind === 'bow') {
       drawSprite(c, b.sprite, px, py, 1.7, { rot: ang });
     } else {
       drawSprite(c, b.sprite, px, py, 1.6, { anchor: 'feet', rot: ang + Math.PI / 2 });
@@ -1780,7 +1855,7 @@ export class Game {
       return;
     }
     const ext = Math.sin(Math.min(1, t * 1.25) * Math.PI); // 빠르게 뻗고 천천히 감긴다
-    const len = (b.range + this.m.extra * 16) * ext;
+    const len = this.form().range * ext;
     const nx = -Math.sin(a);
     const ny = Math.cos(a);
     const wave = Math.sin(t * Math.PI * 3) * 18 * (1 - t) * p.swingDir;

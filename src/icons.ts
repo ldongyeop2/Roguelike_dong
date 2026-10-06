@@ -67,6 +67,18 @@ const SHAPES = {
     '..oao...oo..', '...oaoo.....', '....oaao....', '......oao...',
     '.......odo..', '.......odo..', '.......odo..', '........o...',
   ],
+  scope: [
+    '....oooo....', '..ooaaaaoo..', '.oabbbbbbao.', '.oabdddddbao', 'oabdd..ddbao', 'oabd....dbao',
+    'oabd....dbao', 'oabdd..ddbao', '.oabdddddbao', '.oacccccccao', '..ooaaaaoo..', '....oooo....',
+  ],
+  mask: [
+    '............', '.oooooooooo.', 'oaaaaaaaaaao', 'oabbaaaabbao', 'oaoddooddoao', 'oaoddoooddao',
+    'oaaooaaooaao', 'oaaaaaaaaaao', '.oaaccccaao.', '..oaaaaaao..', '...oooooo...', '............',
+  ],
+  dice: [
+    '............', '.oooooooooo.', '.obbbbbbbbo.', '.obdbbbbdbo.', '.obbbbbbbbo.', '.obbbdbbbbo.',
+    '.obbbbbbbbo.', '.obbbbbbbbo.', '.obdbbbbdbo.', '.occcccccco.', '.oooooooooo.', '............',
+  ],
   amulet: [
     '.oo......oo.', '.oao....oao.', '..oao..oao..', '...oaooao...',
     '....oaao....', '....oddo....', '...odbddo...', '..odbddddo..',
@@ -94,6 +106,9 @@ const PAL: Record<string, Palette> = {
   venom: { o: '#0d240d', a: '#5ab84a', b: '#c8f0a0', c: '#2a6a20', d: '#9af07a' },
   steel: { o: '#1d1f26', a: '#9aa4b4', b: '#e0e6ee', c: '#5b6372', d: '#8a5a33' },
   hide: { o: '#2b1a12', a: '#8a5a33', b: '#c9a25a', c: '#5e3a20', d: '#3a2418' },
+  lens: { o: '#1d1f26', a: '#5b6372', b: '#9fe6ff', c: '#3a3f4a', d: '#e0f8ff' },
+  madness: { o: '#200a10', a: '#e8dccb', b: '#ffffff', c: '#9a8a78', d: '#c0392b' },
+  bone: { o: '#1d1f26', a: '#d8d0c0', b: '#f6f2ea', c: '#9a9080', d: '#c0392b' },
 };
 
 export const GEN = {
@@ -120,6 +135,9 @@ export const GEN = {
   g_stinger: ['stinger', 'venom'],
   g_gauntlet: ['gauntlet', 'steel'],
   g_whip: ['whip', 'hide'],
+  g_scope: ['scope', 'lens'],
+  g_mask: ['mask', 'madness'],
+  g_dice: ['dice', 'bone'],
 } satisfies Record<string, [keyof typeof SHAPES, keyof typeof PAL]>;
 
 export type GenKey = keyof typeof GEN;

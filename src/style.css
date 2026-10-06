@@ -203,3 +203,6 @@ kbd { font-family: var(--font-pixel); font-size: 8px; color: var(--text); backgr
 @keyframes legend-flash { 0% { background: rgba(255, 190, 90, 0.75); } 100% { background: rgba(13, 9, 12, 0.78); } }
 .screen.gacha-screen { background: rgba(13, 9, 12, 0.9); }
 .reveal .sub { text-shadow: 0 1px 2px #000, 0 0 6px #000; }
+
+/* 제약과 보상 아이템의 대가 */
+.cost { color: var(--blood); font-size: 12px; border-top: 1px dashed color-mix(in srgb, var(--blood) 45%, transparent); padding-top: 4px; margin-top: 2px; }

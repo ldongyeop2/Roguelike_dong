@@ -55,6 +55,18 @@ export interface Mods {
   homing: number; // 투사체 유도
   split: number; // 처치 시 파편
   frost: number; // 냉기(둔화)
+  // 제약과 보상이 있는 아이템용. 근접 공격 방식 바꾸기(우선순위: 던지기 > 회전 > 내려치기 > 찌르기)
+  formThrust: number; // 베기 무기를 찌르기로
+  formSmash: number; // 근접 무기를 내려치기로
+  formSpin: number; // 베기/내려치기를 360도 회전 베기로
+  formThrow: number; // 근접 무기를 던지기로
+  scatter: number; // 활/지팡이 산탄
+  scope: number; // 활/지팡이 저격
+  overload: number; // 활/지팡이 투사체 대형화와 폭발
+  dmgTaken: number; // 받는 피해 배율
+  healMul: number; // 모든 회복 배율
+  meleeRange: number; // 근접 사거리 배율
+  dice: number; // 치명타 피해 증가, 치명타가 아니면 피해 감소
 }
 
 export const baseMods = (): Mods => ({
@@ -79,6 +91,17 @@ export const baseMods = (): Mods => ({
   homing: 0,
   split: 0,
   frost: 0,
+  formThrust: 0,
+  formSmash: 0,
+  formSpin: 0,
+  formThrow: 0,
+  scatter: 0,
+  scope: 0,
+  overload: 0,
+  dmgTaken: 1,
+  healMul: 1,
+  meleeRange: 1,
+  dice: 0,
 });
 
 interface Base {
@@ -120,6 +143,7 @@ export interface CharDef extends Base {
 export interface ItemDef extends Base {
   kind: 'item';
   tags: Tag[];
+  cost?: string; // 제약(대가). 있으면 보상 카드와 도감에 붉게 표시한다.
   apply(m: Mods): void;
 }
 
@@ -275,6 +299,71 @@ export const ITEMS: ItemDef[] = [
   {
     kind: 'item', id: 'coin', tags: [], sprite: 'chest', name: '행운의 동전', desc: '보상 선택지 +1 (최대 5)',
     apply: (m) => { m.choices += 1; }, unlock: { stat: 'totalRooms', target: 30 },
+  },
+
+  // ---------- 제약과 보상 ----------
+  // 무기 공격 방식을 바꾸는 아이템
+  {
+    kind: 'item', id: 'thrust_manual', tags: ['blade'], sprite: 'w_spear', name: '찌르기 교본',
+    desc: '베기 무기가 찌르기로 바뀝니다. 피해 +40%, 사거리 +30%', cost: '공격 범위가 좁아지고 적 투사체를 쳐내지 못합니다',
+    apply: (m) => { m.formThrust += 1; },
+  },
+  {
+    kind: 'item', id: 'heavy_weight', tags: ['guard'], sprite: 'w_hammer_long', name: '무거운 추',
+    desc: '모든 근접 무기가 내려치기로 바뀝니다. 피해 +50%, 넉백 2배, 넓은 범위', cost: '근접 공격 속도 -30%',
+    apply: (m) => { m.formSmash += 1; },
+  },
+  {
+    kind: 'item', id: 'whirl_grip', tags: ['blade', 'swift'], sprite: 'w_battle_axe', name: '회오리 손잡이',
+    desc: '베기와 내려치기가 몸 둘레 360도 회전 베기로 바뀝니다', cost: '근접 피해 -25%, 근접 공격 속도 -15%',
+    apply: (m) => { m.formSpin += 1; }, unlock: { stat: 'totalKills', target: 150 },
+  },
+  {
+    kind: 'item', id: 'throw_glove', tags: ['shot'], sprite: 'g_gauntlet', name: '투척 장갑',
+    desc: '근접 무기를 휘두르는 대신 멀리 던집니다. 피해 +20%, 관통 +1', cost: '근접 판정이 사라지고 근접 공격 속도 -20%',
+    apply: (m) => { m.formThrow += 1; }, unlock: { stat: 'deaths', target: 3 },
+  },
+  // 투사체를 바꾸는 아이템
+  {
+    kind: 'item', id: 'scatter_string', tags: ['shot'], sprite: 'w_bow', name: '산탄 시위',
+    desc: '활과 지팡이 투사체가 3발 더 부채꼴로 나갑니다', cost: '투사체 피해 -45%, 사거리 -40%',
+    apply: (m) => { m.scatter += 1; },
+  },
+  {
+    kind: 'item', id: 'scope', tags: ['shot'], sprite: 'g_scope', name: '저격 조준경',
+    desc: '활과 지팡이 투사체 속도 2배, 피해 +50%, 관통 +2', cost: '원거리 공격 속도 -40%',
+    apply: (m) => { m.scope += 1; }, unlock: { stat: 'bestRoom', target: 4 },
+  },
+  {
+    kind: 'item', id: 'overload', tags: ['element'], sprite: 'w_staff_red', name: '과부하 수정',
+    desc: '활과 지팡이 투사체가 2배로 커지고, 맞히면 폭발합니다', cost: '원거리 공격 속도 -40%',
+    apply: (m) => { m.overload += 1; }, unlock: { stat: 'totalKills', target: 250 },
+  },
+  // 위험을 감수하는 아이템
+  {
+    kind: 'item', id: 'mad_mask', tags: ['blood', 'swift'], sprite: 'g_mask', name: '광기의 가면',
+    desc: '공격 속도 +45%', cost: '받는 피해 +35%',
+    apply: (m) => { m.rate *= 1.45; m.dmgTaken *= 1.35; },
+  },
+  {
+    kind: 'item', id: 'feather_blade', tags: ['swift'], sprite: 'w_longsword', name: '깃털 칼날',
+    desc: '이동 속도 +20%, 공격 속도 +15%', cost: '근접 사거리 -25%, 피해 -10%',
+    apply: (m) => { m.speed *= 1.2; m.rate *= 1.15; m.meleeRange *= 0.75; m.dmg *= 0.9; },
+  },
+  {
+    kind: 'item', id: 'penance', tags: ['blood'], sprite: 'w_club', name: '고행의 사슬',
+    desc: '피해 +35%', cost: '모든 회복량 -60% (흡혈, 재생, 방 클리어 회복 포함)',
+    apply: (m) => { m.dmg *= 1.35; m.healMul *= 0.4; }, unlock: { stat: 'deaths', target: 5 },
+  },
+  {
+    kind: 'item', id: 'giant_glove', tags: ['guard'], sprite: 'w_hammer', name: '거인의 장갑',
+    desc: '근접 사거리 +50%, 피해 +20%', cost: '이동 속도 -20%',
+    apply: (m) => { m.meleeRange *= 1.5; m.dmg *= 1.2; m.speed *= 0.8; }, unlock: { stat: 'bossKills', target: 1 },
+  },
+  {
+    kind: 'item', id: 'gambler_dice', tags: ['shot', 'blood'], sprite: 'g_dice', name: '도박꾼의 주사위',
+    desc: '치명타 확률 +25%, 치명타 피해 +1배', cost: '치명타가 아닌 공격의 피해 -30%',
+    apply: (m) => { m.crit += 0.25; m.dice += 1; }, unlock: { stat: 'itemsCollected', target: 40 },
   },
 ];
 

@@ -14,6 +14,9 @@ const tagChips = (tags: Tag[] | undefined) => (tags && tags.length
   ? `<div class="tags">${tags.map((t) => `<span class="tag-chip" style="color:${TAG_INFO[t].color};border-color:${TAG_INFO[t].color}">${TAG_INFO[t].name}</span>`).join('')}</div>`
   : '');
 
+/** 제약과 보상 아이템의 대가 줄 */
+const costLine = (cost?: string) => (cost ? `<div class="cost">대가: ${cost}</div>` : '');
+
 const KIND_LABEL = { char: '직업', item: '아이템', skill: '스킬', gear: '장비' } as const;
 
 /** 아직 전직하지 않은 모험가는 무채색으로 보여 준다. */
@@ -53,7 +56,8 @@ export class UI {
     const tags = d.kind === 'item' ? tagChips(d.tags) : d.kind === 'char' && d.tag ? tagChips([d.tag]) : '';
     const sub = d.kind === 'char' && d.parent ? `<div class="sub">${charById(d.parent).name}에서 전직</div>` : '';
     const pas = d.kind === 'char' && d.passive ? `<div class="sub">${d.passive}</div>` : '';
-    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${icon(d.sprite)}${d.name}</div>${sub}${tags}<div>${d.desc}</div>${pas}</div>`;
+    const cost = d.kind === 'item' ? costLine(d.cost) : '';
+    return `<div class="card ${sel ? 'sel' : ''}" ${extra}><div class="name">${icon(d.sprite)}${d.name}</div>${sub}${tags}<div>${d.desc}</div>${cost}${pas}</div>`;
   }
 
   showMenu(save: Save, h: MenuHandlers, tab: 'play' | 'codex' = 'play') {
@@ -166,7 +170,7 @@ export class UI {
       `<h1>ROOM ${room} 클리어</h1><div class="sub">보상을 하나 선택하세요</div>
        <div class="rewards">${cards.map((c, i) =>
          `<div class="card ${c.hint ? 'combo' : ''}" data-i="${i}">${c.hint ? `<div class="combo-badge">발동: ${c.hint}</div>` : ''}
-          <div class="name">${icon(c.sprite, 48)}${c.name}</div>${tagChips(c.tags)}<div>${c.desc}</div></div>`).join('')}</div>`,
+          <div class="name">${icon(c.sprite, 48)}${c.name}</div>${tagChips(c.tags)}<div>${c.desc}</div>${costLine(c.cost)}</div>`).join('')}</div>`,
       'screen dim');
     el.querySelectorAll<HTMLElement>('[data-i]').forEach((b) =>
       b.addEventListener('click', () => onPick(cards[Number(b.dataset.i)])));
