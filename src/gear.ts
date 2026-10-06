@@ -116,7 +116,8 @@ export const WEAPONS: WeaponBase[] = [
   wpn('longsword', '장검', 'w_longsword', 'slash', 27, 0.5, 98, 1.8, 240, { unlock: { stat: 'totalRooms', target: 25 } }),
   wpn('golden_sword', '황금 검', 'w_golden', 'slash', 30, 0.42, 88, 1.9, 260,
     { stats: { crit: 0.08 }, unlock: { stat: 'bossKills', target: 2 } }),
-  wpn('bow', '장궁', 'w_bow', 'bow', 12, 0.32, 0, 0, 80),
+  // 멀리서 안전하게 쏘고 투사체 아이템과 잘 맞아서 근접보다 단일 대상 초당 피해를 낮게 둔다(약 28).
+  wpn('bow', '장궁', 'w_bow', 'bow', 9, 0.32, 0, 0, 80),
   wpn('staff_red', '화염 지팡이', 'w_staff_red', 'staff', 28, 0.8, 0, 0, 120),
   wpn('staff_green', '자연 지팡이', 'w_staff_green', 'staff', 21, 0.62, 0, 0, 100,
     { stats: { regen: 0.5 }, unlock: { stat: 'deaths', target: 5 } }),
