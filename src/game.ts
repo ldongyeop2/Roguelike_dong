@@ -30,17 +30,17 @@ const CLEAR_DROP_CHANCE = 0.3;
 /** 전직 제단이 나오는 방(보스 방)과 그때 고르는 단계: 1차 전직, 2차 각성, 3차 각성 */
 const JOB_ROOMS: Record<number, 1 | 2 | 3> = { 5: 1, 10: 2, 15: 3 };
 
-type EnemyKind = 'grunt' | 'archer' | 'charger' | 'swarm' | 'brute' | 'boss';
+type EnemyKind = 'grunt' | 'archer' | 'charger' | 'swarm' | 'brute' | 'seer' | 'boss';
 
 const ENEMY_SPRITE: Record<Exclude<EnemyKind, 'boss'>, SpriteKey> = {
-  grunt: 'orc_warrior', archer: 'orc_shaman', swarm: 'imp', charger: 'chort', brute: 'pumpkin',
+  grunt: 'orc_warrior', archer: 'orc_shaman', swarm: 'imp', charger: 'chort', brute: 'pumpkin', seer: 'necromancer',
 };
 const BOSS_SPRITE: SpriteKey[] = ['big_zombie', 'big_zombie', 'ogre', 'big_demon'];
 const BOSS_NAME = ['', '파수꾼', '군주', '심연의 왕'];
 
 /** 처치 시 장비 드랍 확률 */
 const DROP_CHANCE: Record<EnemyKind, number> = {
-  grunt: 0.04, archer: 0.04, swarm: 0.015, charger: 0.06, brute: 0.15, boss: 1,
+  grunt: 0.04, archer: 0.04, swarm: 0.015, charger: 0.06, brute: 0.15, seer: 0.06, boss: 1,
 };
 /** 무기 종류별 휘두르기 애니메이션 길이(초) */
 const SWING_TIME: Record<AttackKind, number> = {
@@ -76,7 +76,11 @@ const ENEMY: Record<Exclude<EnemyKind, 'boss'>, EnemyStat> = {
   swarm: { hp: 7, r: 8, speed: 115, dmg: 6, color: '#e89a7a', cost: 0.5, minRoom: 2 },
   charger: { hp: 38, r: 14, speed: 70, dmg: 16, color: '#b45ad9', cost: 2, minRoom: 3 },
   brute: { hp: 95, r: 21, speed: 48, dmg: 20, color: '#8a5a3a', cost: 4, minRoom: 6 },
+  // 예견자: 플레이어의 이동 방향을 읽고 도착할 자리로 쏜다. 10번 방부터.
+  seer: { hp: 20, r: 11, speed: 58, dmg: 12, color: '#b05ad0', cost: 2.5, minRoom: 10 },
 };
+/** 예견자 사격: 조준 시간, 재사용 대기, 탄속, 예측 최대 시간(초) */
+const SEER = { aim: 0.55, cd: 2.3, speed: 270, lead: 1.8 };
 
 interface Enemy {
   id: number;
@@ -208,6 +212,8 @@ export class Game {
   private turrets: Turret[] = [];
   private fx: Fx[] = [];
   private waves: EnemyKind[][] = [];
+  private pvx = 0; // 플레이어 이동 속도(부드럽게 따라감)
+  private pvy = 0;
   private nextId = 1;
 
   room = 0;
@@ -825,6 +831,7 @@ export class Game {
     const regen = this.m.regen + this.gs.regen;
     if (regen > 0) this.heal(regen * dt);
 
+    const ox = p.x, oy = p.y;
     if (p.dashT > 0) {
       p.dashT -= dt;
       p.x += p.dashX * 700 * dt;
@@ -841,6 +848,12 @@ export class Game {
     }
     p.x = clamp(p.x, WALL + p.r, W - WALL - p.r);
     p.y = clamp(p.y, TOP + p.r, H - WALL - p.r);
+    // 예견자가 읽는 플레이어 속도. 대시처럼 순간적인 움직임에 휘둘리지 않게 부드럽게 따라간다.
+    if (dt > 0) {
+      const k = 1 - Math.exp(-8 * dt);
+      this.pvx += ((p.x - ox) / dt - this.pvx) * k;
+      this.pvy += ((p.y - oy) / dt - this.pvy) * k;
+    }
 
     if (this.input.takeSkill() && p.skillId && p.skillCd <= 0) this.useSkill();
 
@@ -1075,6 +1088,9 @@ export class Game {
           else if (d < 200) { e.x -= Math.cos(toP) * e.speed * dt; e.y -= Math.sin(toP) * e.speed * dt; }
           if (e.cd <= 0) { e.cd = 1.9; this.enemyShot(e.x, e.y, toP, 210, e.dmg); }
           break;
+        case 'seer':
+          this.updateSeer(e, dt, toP, d);
+          break;
         case 'charger':
           this.updateCharger(e, dt, toP);
           break;
@@ -1099,6 +1115,53 @@ export class Game {
       e.y = clamp(e.y, TOP + e.r, H - WALL - e.r);
 
       if (d < e.r + p.r) this.hurtPlayer(e.dmg, e);
+    }
+  }
+
+  /** 플레이어가 지금 속도로 계속 움직인다고 보고, 탄이 만나는 지점의 각도를 구한다. */
+  private leadAngle(x: number, y: number, speed: number): number {
+    const p = this.p;
+    const rx = p.x - x, ry = p.y - y;
+    const vx = this.pvx, vy = this.pvy;
+    // |r + v t| = speed * t 를 t에 대해 푼다.
+    const a = vx * vx + vy * vy - speed * speed;
+    const b = 2 * (rx * vx + ry * vy);
+    const c = rx * rx + ry * ry;
+    let t = 0;
+    if (Math.abs(a) < 1e-6) t = b < 0 ? -c / b : 0;
+    else {
+      const disc = b * b - 4 * a * c;
+      if (disc >= 0) {
+        const s = Math.sqrt(disc);
+        const t1 = (-b - s) / (2 * a), t2 = (-b + s) / (2 * a);
+        t = Math.min(t1 > 0 ? t1 : Infinity, t2 > 0 ? t2 : Infinity);
+        if (!isFinite(t)) t = 0;
+      }
+    }
+    t = Math.min(t, SEER.lead);
+    const tx = clamp(p.x + vx * t, WALL + p.r, W - WALL - p.r);
+    const ty = clamp(p.y + vy * t, TOP + p.r, H - WALL - p.r);
+    return Math.atan2(ty - y, tx - x);
+  }
+
+  /** 예견자: 거리를 두고 조준선을 보여 준 뒤 예측 지점으로 쏜다. 조준 중에는 멈춘다. */
+  private updateSeer(e: Enemy, dt: number, toP: number, d: number) {
+    if (e.state === 0) {
+      if (d > 330) { e.x += Math.cos(toP) * e.speed * dt; e.y += Math.sin(toP) * e.speed * dt; }
+      else if (d < 230) { e.x -= Math.cos(toP) * e.speed * dt; e.y -= Math.sin(toP) * e.speed * dt; }
+      if (e.cd <= 0) { e.state = 1; e.st = SEER.aim; }
+      return;
+    }
+    // 조준 중: 매 프레임 예측 지점을 다시 계산해 조준선을 갱신한다.
+    const a = this.leadAngle(e.x, e.y, SEER.speed);
+    e.dx = Math.cos(a);
+    e.dy = Math.sin(a);
+    e.st -= dt;
+    if (e.st <= 0) {
+      this.enemyShot(e.x, e.y, a, SEER.speed, e.dmg, '#d58aff');
+      e.state = 0;
+      e.cd = SEER.cd;
+      e.act++;
     }
   }
 
@@ -1248,10 +1311,10 @@ export class Game {
     }
   }
 
-  private enemyShot(x: number, y: number, a: number, speed: number, dmg: number) {
+  private enemyShot(x: number, y: number, a: number, speed: number, dmg: number, color = '#ff7a7a') {
     this.projs.push({
       x, y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, r: 6, dmg, life: 6,
-      friendly: false, pierce: 0, bounce: 0, hit: new Set(), color: '#ff7a7a',
+      friendly: false, pierce: 0, bounce: 0, hit: new Set(), color,
     });
   }
 
@@ -1573,6 +1636,27 @@ export class Game {
       c.beginPath();
       c.ellipse(e.x, feet, e.r * 0.9, e.r * 0.3, 0, 0, Math.PI * 2);
       c.fill();
+      if (e.kind === 'seer' && e.state === 1) {
+        // 조준선: 발사가 가까울수록 진해지고 굵어진다.
+        const k = 1 - Math.max(0, e.st) / SEER.aim;
+        c.save();
+        c.beginPath();
+        c.rect(WALL, TOP, W - WALL * 2, H - WALL - TOP);
+        c.clip();
+        c.strokeStyle = `rgba(213, 138, 255, ${0.25 + 0.6 * k})`;
+        c.lineWidth = 1 + 2 * k;
+        c.setLineDash([8, 6]);
+        c.beginPath();
+        c.moveTo(e.x, e.y);
+        c.lineTo(e.x + e.dx * 900, e.y + e.dy * 900);
+        c.stroke();
+        c.restore();
+        // 손끝에 모이는 기운
+        c.fillStyle = `rgba(213, 138, 255, ${0.2 + 0.35 * k})`;
+        c.beginPath();
+        c.arc(e.x, e.y, e.r * (1 + 1.4 * k), 0, Math.PI * 2);
+        c.fill();
+      }
       const aura = e.frostT > 0 ? 'rgba(140, 210, 255, 0.4)' : e.burnT > 0 ? 'rgba(255, 140, 50, 0.35)' : e.poisonT > 0 ? 'rgba(130, 220, 100, 0.3)' : '';
       if (aura) {
         c.fillStyle = aura;
@@ -1586,7 +1670,7 @@ export class Game {
           anchor: 'feet' as const,
           frame: animFrame(key, this.time + e.id * 0.37, e.state !== 1),
           flip: this.p.x < e.x,
-          flash: e.flash > 0 || e.state === 1 || (e.phaseT > 0 && Math.sin(this.time * 40) > 0.3),
+          flash: e.flash > 0 || (e.state === 1 && e.kind !== 'seer') || (e.phaseT > 0 && Math.sin(this.time * 40) > 0.3),
         };
         // 2페이즈: 다시 칠하고 뿔을 그려 넣은 전용 도트 그림
         const rage = e.kind === 'boss' && e.bphase === 2 && drawRage(c, key, e.tier, e.x, feet, scale * 1.12, opts);

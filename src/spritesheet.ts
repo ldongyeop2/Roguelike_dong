@@ -29,6 +29,7 @@ export const S = {
   imp: mob(64),
   chort: mob(272, 24),
   pumpkin: mob(320, 24),
+  necromancer: { x: 368, y: 224, w: 16, h: 24, n: 4 }, // 대기 4프레임만 있다
   // 보스
   big_zombie: big(332),
   ogre: big(380),
