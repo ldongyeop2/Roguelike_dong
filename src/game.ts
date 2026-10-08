@@ -14,6 +14,7 @@ import { animFrame, drawIcon, drawRage, drawSprite, type IconRef } from './sprit
 import { isGenKey } from './icons';
 import { S, type SpriteKey } from './spritesheet';
 import { boss3d, type BossPose } from './boss3d';
+import { ADAPT_LEVEL, TRAITS, blend, emptyLog, emptyScores, pickTraits, scoreRoom, type RoomLog, type Trait } from './adapt';
 import { angDiff, clamp, dist, rand, shuffle } from './util';
 
 export const W = 960;
@@ -76,11 +77,15 @@ const ENEMY: Record<Exclude<EnemyKind, 'boss'>, EnemyStat> = {
   swarm: { hp: 7, r: 8, speed: 115, dmg: 6, color: '#e89a7a', cost: 0.5, minRoom: 2 },
   charger: { hp: 38, r: 14, speed: 70, dmg: 16, color: '#b45ad9', cost: 2, minRoom: 3 },
   brute: { hp: 95, r: 21, speed: 48, dmg: 20, color: '#8a5a3a', cost: 4, minRoom: 6 },
-  // 예견자: 플레이어의 이동 방향을 읽고 도착할 자리로 쏜다. 10번 방부터.
-  seer: { hp: 20, r: 11, speed: 58, dmg: 12, color: '#b05ad0', cost: 2.5, minRoom: 10 },
+  // 예견자: 플레이어의 이동 방향을 읽고 도착할 자리로 쏜다. 무작위로 나오지 않고, 거리 유지형에 적응한 주술사가 이것으로 진화한다.
+  seer: { hp: 20, r: 11, speed: 58, dmg: 12, color: '#b05ad0', cost: 2.5, minRoom: 99 },
 };
 /** 예견자 사격: 조준 시간, 재사용 대기, 탄속, 예측 최대 시간(초) */
 const SEER = { aim: 0.55, cd: 2.3, speed: 270, lead: 1.8 };
+/** 장판 공격: 반지름, 터지기까지 시간 */
+const ZONE = { r: 52, delay: 1.0 };
+/** 정면 방패가 막는 각도(중심에서 양쪽으로)와 도는 속도(rad/s) */
+const SHIELD = { arc: 1.0, turn: 1.6 };
 
 interface Enemy {
   id: number;
@@ -110,6 +115,9 @@ interface Enemy {
   phaseT: number; // 2페이즈로 넘어가는 포효 시간(이 동안 무적)
   dashLeft: number; // 2페이즈 연속 돌진 남은 횟수
   actKind: 'attack' | 'summon';
+  adapt: Trait | null; // 플레이어 성향에 맞춰 얻은 대응
+  adaptCd: number; // 대응 행동 재사용 대기
+  face: number; // 정면 방패가 향하는 각도(천천히 돈다)
   dead: boolean;
 }
 
@@ -212,6 +220,12 @@ export class Game {
   private turrets: Turret[] = [];
   private fx: Fx[] = [];
   private waves: EnemyKind[][] = [];
+  private zones: { x: number; y: number; r: number; t: number; delay: number; dmg: number; color: string }[] = []; // 터지기 전 장판
+  private log: RoomLog = emptyLog(); // 이번 방 전투 기록
+  private styleScore = emptyScores(); // 런 누적 성향 점수
+  private styleRooms = 0; // 성향을 기록한 방 수
+  private adaptNow: Trait[] = []; // 이번 방에서 적이 대응하는 성향
+  private hitSrc: 'melee' | 'shot' | 'other' = 'other'; // 지금 주는 피해의 출처(성향 기록용)
   private pvx = 0; // 플레이어 이동 속도(부드럽게 따라감)
   private pvy = 0;
   private nextId = 1;
@@ -272,6 +286,11 @@ export class Game {
     this.enterT = ENTER_T;
     this.hop = 0;
     this.sink = 0;
+    this.zones = [];
+    this.log = emptyLog();
+    const lv = ADAPT_LEVEL[Math.min(ADAPT_LEVEL.length - 1, this.bossKills)];
+    this.adaptNow = n % BOSS_EVERY === 0 ? [] : pickTraits(this.styleScore, lv.traits);
+    if (this.adaptNow.length) this.bannerT = 2.6;
     this.waves = this.buildWaves(n);
     this.spawnWave();
   }
@@ -280,7 +299,7 @@ export class Game {
     if (n % BOSS_EVERY === 0) return [['boss']];
     const total = 5 + n * 1.6;
     const waveCount = n < 3 ? 1 : 2;
-    const pool = (Object.keys(ENEMY) as (keyof typeof ENEMY)[]).filter((k) => ENEMY[k].minRoom <= n);
+    const pool = (Object.keys(ENEMY) as (keyof typeof ENEMY)[]).filter((k) => ENEMY[k].minRoom <= n); // 예견자(minRoom 99)는 적응으로만 나온다
     const waves: EnemyKind[][] = [];
     for (let w = 0; w < waveCount; w++) {
       let budget = total / waveCount;
@@ -312,14 +331,84 @@ export class Game {
         y = rand(TOP + 30, H - WALL - 30);
         if (dist(x, y, this.p.x, this.p.y) > 220) break;
       }
-      this.enemies.push(this.makeEnemy(kind, x, y, hpMul));
+      const lv = ADAPT_LEVEL[Math.min(ADAPT_LEVEL.length - 1, this.bossKills)];
+      const t = this.adaptNow.length && kind !== 'swarm' && Math.random() < lv.share
+        ? this.adaptNow[Math.floor(Math.random() * this.adaptNow.length)] : null;
+      // 거리 유지형에 적응한 주술사는 예견자로 진화한다.
+      const e = this.makeEnemy(t === 'kite' && kind === 'archer' ? 'seer' : kind, x, y, hpMul);
+      if (t) this.adaptEnemy(e, t);
+      this.enemies.push(e);
+    }
+  }
+
+  /** 적에게 성향 대응을 붙인다. */
+  private adaptEnemy(e: Enemy, t: Trait) {
+    e.adapt = t;
+    e.face = Math.atan2(this.p.y - e.y, this.p.x - e.x);
+    if (t === 'kite' && e.kind !== 'seer' && e.kind !== 'charger') e.speed *= 1.3;
+  }
+
+  /** 방 하나의 전투 기록을 런 성향 점수에 반영한다. */
+  private recordStyle() {
+    const sc = scoreRoom(this.log);
+    if (sc) {
+      blend(this.styleScore, sc, this.styleRooms === 0);
+      this.styleRooms++;
+    }
+    this.log = emptyLog();
+  }
+
+  /** 현재 적응 상태(일시정지 화면용) */
+  adaptInfo() {
+    return {
+      level: Math.min(ADAPT_LEVEL.length - 1, this.bossKills),
+      active: [...this.adaptNow],
+      scores: { ...this.styleScore },
+      rooms: this.styleRooms,
+    };
+  }
+
+  /** 장판: 잠시 뒤 터지며 범위 안의 플레이어에게 피해를 준다. */
+  private addZone(x: number, y: number, dmg: number, color: string, delay = ZONE.delay) {
+    if (this.zones.length >= 6) return;
+    this.zones.push({
+      x: clamp(x, WALL + 20, W - WALL - 20), y: clamp(y, TOP + 20, H - WALL - 20),
+      r: ZONE.r, t: 0, delay, dmg, color,
+    });
+  }
+
+  private updateZones(dt: number) {
+    const p = this.p;
+    for (const z of this.zones) {
+      z.t += dt;
+      if (z.t < z.delay) continue;
+      this.fx.push({ kind: 'ring', x: z.x, y: z.y, t: 0, life: 0.3, r: z.r, color: z.color });
+      this.burst(z.x, z.y, 14, z.color, 200, { size: 3, life: 0.4 });
+      if (dist(z.x, z.y, p.x, p.y) < z.r + p.r * 0.5) this.hurtPlayer(z.dmg, null);
+    }
+    this.zones = this.zones.filter((z) => z.t < z.delay);
+  }
+
+  /** 가시 피부 반사 피해. 무적 시간을 주지 않아 실제 공격을 막아 주지 않는다. */
+  private thornPrick(e: Enemy) {
+    const p = this.p;
+    if (p.invuln > 0 || p.shieldT > 0 || this.phase !== 'playing') return;
+    const armor = this.gs.armor;
+    const taken = Math.max(1, (3 + Math.floor(this.room / 3)) * (1 - armor / (armor + 15)) * this.m.dmgTaken);
+    p.hp -= taken;
+    this.hurtFlash = Math.max(this.hurtFlash, 0.4);
+    this.burst(e.x, e.y, 6, TRAITS.melee.color, 160, { dir: Math.atan2(p.y - e.y, p.x - e.x), spread: 0.8, size: 2, life: 0.25 });
+    this.fx.push({ kind: 'text', x: p.x, y: p.y - 20, t: 0, life: 0.5, text: `-${Math.round(taken)}`, color: TRAITS.melee.color });
+    if (p.hp <= 0) {
+      p.hp = 0;
+      this.finish(false);
     }
   }
 
   private makeEnemy(kind: EnemyKind, x: number, y: number, hpMul: number): Enemy {
     const base = {
       id: this.nextId++, x, y, kx: 0, ky: 0, spawnT: 0.9, cd: rand(0.6, 1.6), state: 0, st: 0,
-      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, act: 0, actKind: 'attack' as const, bphase: 1, phaseT: 0, dashLeft: 0, dead: false,
+      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, act: 0, actKind: 'attack' as const, bphase: 1, phaseT: 0, dashLeft: 0, adapt: null, adaptCd: rand(1.5, 3), face: 0, dead: false,
     };
     if (kind === 'boss') {
       const tier = Math.floor(this.room / BOSS_EVERY);
@@ -340,6 +429,8 @@ export class Game {
     this.roomsCleared++;
     this.heal(this.p.maxHp * 0.12);
     this.projs = this.projs.filter((q) => q.friendly);
+    this.zones = [];
+    this.recordStyle();
     // 보스 방은 장비를 보장하고, 일반 방은 가끔만 상자에서 장비가 나온다.
     const boss = this.room % BOSS_EVERY === 0;
     if (boss || Math.random() < CLEAR_DROP_CHANCE) this.spawnDrop(W / 2, H / 2 + 40, boss ? 2 : 0);
@@ -471,6 +562,7 @@ export class Game {
     this.updateTurrets(dt);
     this.updateEnemies(dt, dt * slow);
     this.updateProjs(dt, dt * slow);
+    this.updateZones(dt * slow);
     this.updateOrbit(dt);
     this.updateChest(dt);
     this.updateAltar();
@@ -848,6 +940,16 @@ export class Game {
     }
     p.x = clamp(p.x, WALL + p.r, W - WALL - p.r);
     p.y = clamp(p.y, TOP + p.r, H - WALL - p.r);
+    // 성향 기록: 적이 나와 있는 동안의 이동, 거리
+    if (this.phase === 'playing' && this.enterT <= 0) {
+      let nd = Infinity;
+      for (const e of this.enemies) if (!e.dead && e.spawnT <= 0) nd = Math.min(nd, dist(e.x, e.y, p.x, p.y));
+      if (nd < Infinity) {
+        this.log.combatT += dt;
+        this.log.distSum += Math.min(nd, 400) * dt;
+        if (p.moving || p.dashT > 0) this.log.moveT += dt; else this.log.stillT += dt;
+      }
+    }
     // 예견자가 읽는 플레이어 속도. 대시처럼 순간적인 움직임에 휘둘리지 않게 부드럽게 따라간다.
     if (dt > 0) {
       const k = 1 - Math.exp(-8 * dt);
@@ -880,6 +982,20 @@ export class Game {
     const def = skillById(p.skillId);
     p.skillCd = def.cd * this.skillCdMul();
     if (this.has('overclock')) this.accelT = 2.5;
+    if (this.phase === 'playing') this.log.skills++;
+    // 잠복 폭발: 스킬 무적이 끝날 무렵 플레이어가 있는 자리에 늦게 터지는 폭발을 남긴다.
+    const lurkers = this.enemies.filter((e) => !e.dead && e.spawnT <= 0 && e.adapt === 'skill').length;
+    if (lurkers > 0) {
+      this.later.push({ t: 0.28, fn: () => {
+        if (this.phase !== 'playing') return;
+        const n = Math.min(3, Math.ceil(lurkers / 2));
+        for (let i = 0; i < n; i++) {
+          const a = rand(0, Math.PI * 2);
+          const off = i === 0 ? 0 : rand(30, 60);
+          this.addZone(this.p.x + Math.cos(a) * off, this.p.y + Math.sin(a) * off, 10 + Math.floor(this.room / 2), TRAITS.skill.color, 0.75);
+        }
+      } });
+    }
     switch (def.id) {
       case 'dash': {
         const a = this.input.axis();
@@ -977,7 +1093,10 @@ export class Game {
       if (e.spawnT > 0 || e.dead) continue;
       if (dist(e.x, e.y, p.x, p.y) > range + e.r) continue;
       if (f.kind !== 'spin' && angDiff(Math.atan2(e.y - p.y, e.x - p.x), p.aim) > f.arc / 2 + 0.15) continue;
+      this.hitSrc = 'melee';
       this.hurtEnemy(e, dmg, true);
+      this.hitSrc = 'other';
+      if (e.adapt === 'melee' && e.adaptCd <= 0) { e.adaptCd = 0.45; this.thornPrick(e); }
       // 회전 베기는 바깥쪽으로 밀어낸다.
       const ka = f.kind === 'spin' ? Math.atan2(e.y - p.y, e.x - p.x) : p.aim;
       e.kx += Math.cos(ka) * b.knock * f.knock;
@@ -1054,19 +1173,22 @@ export class Game {
 
       // 지속 피해: 독연 시너지면 화상과 독이 함께 걸린 적은 2배
       const both = this.has('toxic_fire') && e.burnT > 0 && e.poisonT > 0 ? 2 : 1;
+      const resist = e.adapt === 'element' ? 0.35 : 1; // 원소 저항
       if (e.burnT > 0) {
         e.burnT -= dtReal;
-        e.hp -= e.burnDps * both * dtReal;
+        e.hp -= e.burnDps * both * resist * dtReal;
+        this.log.dot += e.burnDps * both * dtReal;
         if (Math.random() < dtReal * 8) this.burst(e.x + rand(-e.r, e.r), e.y, 1, '#ff8a3a', 30, { grav: -80, size: 3, life: 0.5 });
       }
       if (e.poisonT > 0) {
         e.poisonT -= dtReal;
-        e.hp -= 2 * this.m.poison * e.poisonStacks * both * dtReal;
+        e.hp -= 2 * this.m.poison * e.poisonStacks * both * resist * dtReal;
+        this.log.dot += 2 * this.m.poison * e.poisonStacks * both * dtReal;
         if (e.poisonT <= 0) e.poisonStacks = 0;
         if (Math.random() < dtReal * 6) this.burst(e.x + rand(-e.r, e.r), e.y, 1, '#8ae06a', 20, { grav: -50, size: 3, life: 0.6, glow: false });
       }
       if (e.hp <= 0) { this.killEnemy(e); continue; }
-      e.frostT = Math.max(0, e.frostT - dtReal);
+      e.frostT = Math.max(0, e.frostT - dtReal * (e.adapt === 'element' ? 2.5 : 1));
       const dt = e.frostT > 0 ? dtE * 0.6 : dtE;
       e.x += e.kx * dtReal;
       e.y += e.ky * dtReal;
@@ -1077,6 +1199,17 @@ export class Game {
       const toP = Math.atan2(p.y - e.y, p.x - e.x);
       const d = dist(e.x, e.y, p.x, p.y);
       e.cd -= dt;
+      e.adaptCd -= dt;
+      if (e.adapt === 'ranged') {
+        // 방패는 플레이어 쪽으로 천천히 돈다. 빙 돌아가면 옆이 열린다.
+        let df = toP - e.face;
+        while (df > Math.PI) df -= Math.PI * 2;
+        while (df < -Math.PI) df += Math.PI * 2;
+        e.face += clamp(df, -SHIELD.turn * dt, SHIELD.turn * dt);
+      } else if (e.adapt === 'still' && e.adaptCd <= 0 && d < 520) {
+        e.adaptCd = rand(3.2, 4.4);
+        this.addZone(p.x, p.y, 10 + Math.floor(this.room / 2), TRAITS.still.color);
+      }
 
       switch (e.kind) {
         case 'grunt': case 'swarm': case 'brute':
@@ -1169,14 +1302,20 @@ export class Game {
     if (e.state === 0) {
       e.x += Math.cos(toP) * e.speed * dt;
       e.y += Math.sin(toP) * e.speed * dt;
-      if (e.cd <= 0) { e.state = 1; e.st = 0.7; e.dx = Math.cos(toP); e.dy = Math.sin(toP); }
+      if (e.cd <= 0) {
+        e.state = 1; e.st = e.adapt === 'kite' ? 0.5 : 0.7;
+        // 예측 돌진: 거리 유지형에 적응하면 플레이어가 갈 자리로 돌진한다.
+        const a = e.adapt === 'kite' ? this.leadAngle(e.x, e.y, 520) : toP;
+        e.dx = Math.cos(a); e.dy = Math.sin(a);
+      }
     } else if (e.state === 1) {
       e.st -= dt;
       if (e.st <= 0) { e.state = 2; e.st = 0.55; }
     } else if (e.state === 2) {
       e.st -= dt;
-      e.x += e.dx * 380 * dt;
-      e.y += e.dy * 380 * dt;
+      const sp = e.adapt === 'kite' ? 520 : 380;
+      e.x += e.dx * sp * dt;
+      e.y += e.dy * sp * dt;
       if (e.st <= 0) { e.state = 3; e.st = 0.6; }
     } else {
       e.st -= dt;
@@ -1369,7 +1508,16 @@ export class Game {
           if (e.dead || e.spawnT > 0 || q.hit.has(e.id)) continue;
           if (dist(q.x, q.y, e.x, e.y) < q.r + e.r) {
             q.hit.add(e.id);
+            if (e.adapt === 'ranged' && !q.proc && angDiff(Math.atan2(q.y - e.y, q.x - e.x), e.face) < SHIELD.arc) {
+              // 정면 방패: 투사체를 막는다.
+              q.life = 0;
+              this.burst(q.x, q.y, 6, TRAITS.ranged.color, 140, { size: 2, life: 0.25 });
+              this.fx.push({ kind: 'text', x: e.x, y: e.y - e.r - 6, t: 0, life: 0.45, text: '막음', color: TRAITS.ranged.color });
+              break;
+            }
+            this.hitSrc = q.proc ? 'other' : 'shot';
             this.hurtEnemy(e, q.dmg, true, q.proc);
+            this.hitSrc = 'other';
             if (q.boom) this.blast(q.x, q.y, 40, 10 * this.m.dmg);
             if (q.pierce <= 0) { q.life = 0; break; }
             q.pierce--;
@@ -1402,6 +1550,10 @@ export class Game {
     }
     e.hp -= d;
     e.flash = 0.1;
+    if (fromPlayer && this.phase === 'playing') {
+      if (this.hitSrc === 'melee') this.log.melee += d;
+      else if (this.hitSrc === 'shot') this.log.shot += d;
+    }
     if (fromPlayer) {
       const a = Math.atan2(e.y - this.p.y, e.x - this.p.x);
       this.burst(e.x, e.y, crit ? 8 : 4, crit ? '#ffd24a' : '#fff1c8', crit ? 260 : 180, { dir: a, spread: 0.9, size: 2, life: 0.25 });
@@ -1605,6 +1757,26 @@ export class Game {
       c.fillRect(t.x - 14, t.y + 26, 28 * (t.t / 8), 3);
     }
 
+    for (const z of this.zones) {
+      // 장판: 안쪽 원이 바깥 테두리까지 차오르면 터진다.
+      const k = Math.min(1, z.t / z.delay);
+      c.save();
+      c.translate(z.x, z.y);
+      c.scale(1, 0.6);
+      c.strokeStyle = z.color;
+      c.globalAlpha = 0.5 + 0.5 * k;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(0, 0, z.r, 0, Math.PI * 2);
+      c.stroke();
+      c.globalAlpha = 0.18 + 0.25 * k;
+      c.fillStyle = z.color;
+      c.beginPath();
+      c.arc(0, 0, z.r * k, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
+
     for (const e of this.enemies) {
       if (e.spawnT > 0) {
         // 소환 마법진: 점선 원이 돌며 좁혀진다
@@ -1676,6 +1848,7 @@ export class Game {
         const rage = e.kind === 'boss' && e.bphase === 2 && drawRage(c, key, e.tier, e.x, feet, scale * 1.12, opts);
         if (!rage) drawSprite(c, key, e.x, feet, scale, opts);
       }
+      if (e.adapt) this.renderAdapt(c, e, feet - S[key].h * scale);
       if (e.kind !== 'boss' && e.hp < e.maxHp) {
         const top = feet - S[key].h * scale - 6;
         c.fillStyle = '#000a';
@@ -2061,6 +2234,53 @@ export class Game {
   }
 
   /** 가까운 드랍 장비의 정보와 현재 장착 장비 비교 */
+  /** 적응한 적 표시: 발밑 점선 고리, 머리 위 마름모, 방패 */
+  private renderAdapt(c: CanvasRenderingContext2D, e: Enemy, top: number) {
+    const col = TRAITS[e.adapt!].color;
+    c.save();
+    c.strokeStyle = col;
+    c.lineWidth = 2;
+    c.setLineDash([5, 4]);
+    c.lineDashOffset = -this.time * 20;
+    c.beginPath();
+    c.ellipse(e.x, e.y + e.r, e.r + 5, (e.r + 5) * 0.4, 0, 0, Math.PI * 2);
+    c.stroke();
+    c.setLineDash([]);
+    const y = top - 14 + Math.sin(this.time * 4 + e.id) * 1.5;
+    c.fillStyle = col;
+    c.strokeStyle = '#000';
+    c.lineWidth = 1.5;
+    c.beginPath();
+    c.moveTo(e.x, y - 5);
+    c.lineTo(e.x + 4, y);
+    c.lineTo(e.x, y + 5);
+    c.lineTo(e.x - 4, y);
+    c.closePath();
+    c.fill();
+    c.stroke();
+    if (e.adapt === 'ranged') {
+      c.strokeStyle = col;
+      c.lineWidth = 4;
+      c.globalAlpha = 0.85;
+      c.beginPath();
+      c.arc(e.x, e.y, e.r + 9, e.face - SHIELD.arc, e.face + SHIELD.arc);
+      c.stroke();
+    } else if (e.adapt === 'melee') {
+      // 몸 둘레 가시
+      c.fillStyle = col;
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + this.time * 0.8;
+        const r0 = e.r + 3;
+        c.beginPath();
+        c.moveTo(e.x + Math.cos(a - 0.18) * r0, e.y + Math.sin(a - 0.18) * r0);
+        c.lineTo(e.x + Math.cos(a) * (r0 + 7), e.y + Math.sin(a) * (r0 + 7));
+        c.lineTo(e.x + Math.cos(a + 0.18) * r0, e.y + Math.sin(a + 0.18) * r0);
+        c.fill();
+      }
+    }
+    c.restore();
+  }
+
   private renderAltar(c: CanvasRenderingContext2D, al: { x: number; y: number; tier: 1 | 2 | 3; used: boolean }) {
     const ready = this.phase === 'cleared' && !al.used;
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 3);
@@ -2396,6 +2616,25 @@ export class Game {
     c.font = this.font(15);
     c.fillStyle = '#d8c8b0';
     c.fillText(`처치 ${this.kills}`, W - 28, 47);
+    if (this.adaptNow.length && this.phase === 'playing') {
+      // 이번 방 적응 표시
+      let y = 70;
+      c.font = this.font(13, true);
+      for (const t of this.adaptNow) {
+        const info = TRAITS[t];
+        const tw = c.measureText(info.counter).width;
+        this.panel(c, W - 16 - tw - 30, y - 14, tw + 30, 20);
+        c.fillStyle = info.color;
+        c.beginPath();
+        c.moveTo(W - 28 - tw - 8, y - 9);
+        c.lineTo(W - 28 - tw - 4, y - 4);
+        c.lineTo(W - 28 - tw - 8, y + 1);
+        c.lineTo(W - 28 - tw - 12, y - 4);
+        c.fill();
+        c.fillText(info.counter, W - 28, y);
+        y += 24;
+      }
+    }
 
     // 왼쪽 아래: 획득 아이템 아이콘
     if (this.itemCounts.size > 0) {
@@ -2500,6 +2739,21 @@ export class Game {
       c.font = this.font(18);
       c.fillStyle = '#d8c8b0';
       c.fillText(isBoss ? BOSS_NAME[Math.floor(this.room / BOSS_EVERY)] + '이(가) 깨어났다' : theme.name, W / 2, 224);
+      if (this.adaptNow.length) {
+        // 적응 예고
+        c.font = this.font(15, true);
+        const parts = this.adaptNow.map((t) => TRAITS[t]);
+        const text = `적이 당신의 ${parts.map((t) => t.style).join(', ')} 전투에 적응했다`;
+        c.lineWidth = 4;
+        c.strokeText(text, W / 2, 256);
+        c.fillStyle = parts[0].color;
+        c.fillText(text, W / 2, 256);
+        c.font = this.font(13);
+        c.fillStyle = '#d8c8b0';
+        const sub = parts.map((t) => t.counter).join(' · ');
+        c.strokeText(sub, W / 2, 276);
+        c.fillText(sub, W / 2, 276);
+      }
       c.globalAlpha = 1;
     }
   }

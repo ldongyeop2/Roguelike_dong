@@ -206,3 +206,12 @@ kbd { font-family: var(--font-pixel); font-size: 8px; color: var(--text); backgr
 
 /* 제약과 보상 아이템의 대가 */
 .cost { color: var(--blood); font-size: 12px; border-top: 1px dashed color-mix(in srgb, var(--blood) 45%, transparent); padding-top: 4px; margin-top: 2px; }
+
+/* 적의 적응 */
+.adapt { display: grid; gap: 6px; max-width: 620px; margin: 6px 0 0; }
+.adapt-row { display: grid; grid-template-columns: 110px 1fr 90px; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.adapt-row .bar { height: 6px; }
+.adapt-row .bar i { background: var(--c); }
+.adapt-row.on { color: var(--c); }
+.adapt-row .adapt-counter { font-weight: bold; }
+.adapt-row .sub { grid-column: 1 / -1; font-size: 12px; margin: 0 0 4px; }

@@ -59,6 +59,7 @@ function beginRun(charId: string, weapon: Gear) {
       ui.showPause(
         game.equipment(),
         game.synergyInfo(),
+        game.adaptInfo(),
         () => {
           if (game) game.paused = false;
           ui.hide();

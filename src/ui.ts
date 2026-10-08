@@ -3,6 +3,7 @@ import {
 } from './content';
 import { isUnlocked, progressOf, type RunResult, type Save } from './meta';
 import type { Card } from './game';
+import { TRAITS, TRAIT_ORDER, type Trait } from './adapt';
 import { paintGenIcons } from './icons';
 import { iconHtml, type IconRef } from './sprites';
 import { PAIRS, SETS, SET_NEED, SYN_NAME, TAG_INFO, type SetBonus, type Tag } from './synergy';
@@ -281,8 +282,21 @@ export class UI {
   showPause(
     gear: { slot: Slot; gear: Gear | null }[],
     syn: { active: string[]; sets: (SetBonus & { count: number })[] },
+    adapt: { level: number; active: Trait[]; scores: Record<Trait, number>; rooms: number },
     onResume: () => void, onQuit: () => void,
   ) {
+    // 적의 적응: 성향 점수 막대와 지금 적용 중인 대응
+    const adaptRows = TRAIT_ORDER.map((t) => {
+      const info = TRAITS[t];
+      const on = adapt.active.includes(t);
+      const k = Math.min(1, adapt.scores[t] / info.need);
+      return `<div class="adapt-row ${on ? 'on' : ''}" style="--c:${info.color}"><span class="adapt-name">${info.style}</span>
+        <div class="bar"><i style="width:${k * 100}%"></i></div><span class="adapt-counter">${on ? info.counter : ''}</span>
+        ${on ? `<div class="sub">${info.desc}</div>` : ''}</div>`;
+    }).join('');
+    const adaptHead = adapt.level === 0
+      ? '첫 보스를 쓰러뜨리면 적이 당신의 전투 방식에 적응하기 시작합니다. 막대가 가득 찬 성향이 대응 대상이 됩니다.'
+      : `적응 ${adapt.level}단계: 적의 ${adapt.level === 1 ? '30' : '40'}%가 가장 두드러진 성향 ${adapt.level}개에 대응합니다.`;
     const cards = gear.map(({ slot, gear: g }) => g
       ? `<div class="card" style="border-color:${RARITY[g.rarity].color}"><div class="name">${icon(g.base.sprite)}<span style="color:${RARITY[g.rarity].color}">${gearTitle(g)}</span></div>
          <div class="sub">${gearLines(g).join('<br>')}</div></div>`
@@ -293,6 +307,7 @@ export class UI {
        <div class="sets">${syn.sets.map((st) => `<span class="set-chip ${st.count >= SET_NEED ? 'on' : ''}" style="--c:${TAG_INFO[st.tag].color}">
          ${TAG_INFO[st.tag].name} ${Math.min(st.count, SET_NEED)}/${SET_NEED} · ${st.name}</span>`).join('')}</div>
        <div class="sub">${syn.active.filter((id) => !id.startsWith('set:')).map((id) => SYN_NAME.get(id)).join(', ') || '발동 중인 조합 시너지가 없습니다.'}</div>
+       <h2>적의 적응</h2><div class="sub">${adaptHead}</div><div class="adapt">${adaptRows}</div>
        <div class="row"><button id="resume" class="primary">계속하기</button><button id="quit" class="danger">런 포기</button></div>`,
       'screen');
     el.querySelector('#resume')!.addEventListener('click', onResume);
