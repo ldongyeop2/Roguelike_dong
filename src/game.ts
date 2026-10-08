@@ -81,6 +81,19 @@ const ENEMY: Record<Exclude<EnemyKind, 'boss'>, EnemyStat> = {
   seer: { hp: 20, r: 11, speed: 58, dmg: 12, color: '#b05ad0', cost: 2.5, minRoom: 99 },
 };
 /** 예견자 사격: 조준 시간, 재사용 대기, 탄속, 예측 최대 시간(초) */
+/** '#rrggbb' 색에 투명도를 붙인다. */
+const withAlpha = (hex: string, a: number) => {
+  const n = parseInt(hex.slice(1, 7), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${Math.max(0, Math.min(1, a)).toFixed(3)})`;
+};
+/** 휘두르기 궤적 모양. 회전 베기는 반지름이 사거리 비율, 베기와 내려치기의 rIn은 날 길이 비율(rOut은 날 끝). 몸통 색, 번짐 색 */
+const TRAIL = {
+  slash: { rIn: 0.45, rOut: 0.92, color: '#f4f8ff', glow: '#9fc8ff' },
+  smash: { rIn: 0.2, rOut: 0.95, color: '#ffe6c0', glow: '#ff9a4a' },
+  spin: { rIn: 0.55, rOut: 0.98, color: '#f0e6d4', glow: '#c8b8ff' },
+};
+const SWING_REACH = 16; // 휘두를 때 손에서 무기 손잡이까지 거리
+const TRAIL_FADE = 0.14; // 휘두르기가 끝난 뒤 궤적이 사라지는 시간(초)
 /** 스킬 쿨타임 배율 하한(모든 감소 합산) */
 const SKILL_CD_FLOOR = 0.4;
 const SEER = { aim: 0.55, cd: 2.3, speed: 270, lead: 1.8 };
@@ -230,6 +243,7 @@ export class Game {
   private styleScore = emptyScores(); // 런 누적 성향 점수
   private styleRooms = 0; // 성향을 기록한 방 수
   private adaptNow: Trait[] = []; // 이번 방에서 적이 대응하는 성향
+  private afterT = 1; // 마지막 휘두르기가 끝난 뒤 지난 시간(궤적 잔상용)
   private hitSrc: 'melee' | 'shot' | 'other' = 'other'; // 지금 주는 피해의 출처(성향 기록용)
   private pvx = 0; // 플레이어 이동 속도(부드럽게 따라감)
   private pvy = 0;
@@ -934,6 +948,7 @@ export class Game {
     p.slowT = Math.max(0, p.slowT - dt);
     p.skillCd = Math.max(0, p.skillCd - dt);
     p.atkCd = Math.max(0, p.atkCd - dt);
+    if (p.swingT <= 0) this.afterT += dt; // 휘두르기가 끝난 뒤 궤적이 사라지는 시간
     p.swingT = Math.max(0, p.swingT - dt);
     const regen = this.m.regen + this.gs.regen;
     if (regen > 0) this.heal(regen * dt);
@@ -1064,6 +1079,7 @@ export class Game {
     p.swingT = p.swingDur;
     p.swingAim = p.aim;
     p.swingDir = -p.swingDir; // 베기는 좌우를 번갈아 휘두른다
+    this.afterT = 0;
     this.attackCount++;
     if (this.has('set:blade') && this.attackCount % 4 === 0) this.shards(p.x, p.y, 8, w.dmg * 0.5 * this.dmgMul(), this.has('chain_blast'));
 
@@ -2159,21 +2175,39 @@ export class Game {
       const base = swinging ? p.swingAim : p.aim;
       ang = base + p.swingDir * (-arc / 2 + arc * k);
       if (!swinging) ang = p.aim + p.swingDir * 0.5; // 대기 자세: 조준 방향 옆으로 든다
-      if (swinging && kind !== 'staff') {
-        // 휘두른 궤적
-        const r = f.range * 0.8;
-        const a0 = p.swingAim - p.swingDir * arc / 2;
-        const ec = this.elementColor();
-        c.globalAlpha = 0.35 * (1 - t * 0.5) * (ec ? 1.6 : 1);
-        c.strokeStyle = ec ?? '#ffffff';
-        c.lineWidth = kind === 'smash' ? 14 : 9;
-        c.beginPath();
-        c.arc(hx, hy, r, Math.min(a0, ang), Math.max(a0, ang));
-        c.stroke();
-        c.globalAlpha = 1;
+      if (swinging && kind !== 'staff') reach = SWING_REACH; // 휘두를 때는 팔을 뻗는다
+      if (kind !== 'staff' && kind !== 'throw') {
+        // 휘두른 궤적: 휘두르는 동안 날 끝을 따라 자라고, 끝난 뒤 0.14초 동안 꼬리부터 사라진다.
+        const fade = swinging ? 1 : 1 - this.afterT / TRAIL_FADE;
+        if (fade > 0) {
+          const a0 = p.swingAim - p.swingDir * arc / 2;
+          const head = swinging ? ang : p.swingAim + p.swingDir * arc / 2;
+          // 회전 베기는 꼬리를 한 바퀴보다 짧게 둔다.
+          const tailMax = kind === 'spin' ? Math.PI * 1.3 : arc;
+          let tail = a0;
+          if (Math.abs(head - a0) > tailMax) tail = head - p.swingDir * tailMax;
+          if (!swinging) tail = tail + (head - tail) * (1 - fade); // 꼬리부터 줄어든다
+          const style = TRAIL[kind as 'slash' | 'smash' | 'spin'];
+          const ec = this.elementColor();
+          const rar = this.weapon.rarity;
+          // 베기와 내려치기는 실제 날 길이를 따라 그린다(회전 베기는 판정 범위 전체).
+          const blade = isGenKey(b.sprite) ? 20 : S[b.sprite as SpriteKey].h * 1.6;
+          const tip = SWING_REACH + blade;
+          const rOut = kind === 'spin' ? f.range * style.rOut : Math.max(tip + 6, f.range * 0.6);
+          const rIn = kind === 'spin' ? f.range * style.rIn : SWING_REACH + blade * style.rIn;
+          this.renderSwoosh(c, hx, hy, rIn, rOut, tail, head,
+            ec ?? style.color, rar >= 2 ? RARITY[rar].color : style.glow, fade * (swinging ? 1 : 0.8));
+          if (kind === 'smash' && swinging && t > 0.8) {
+            // 내려친 끝의 충격 섬광
+            const ix = hx + Math.cos(head) * rOut;
+            const iy = hy + Math.sin(head) * rOut;
+            this.renderStar(c, ix, iy, 10 + (t - 0.8) * 90, ec ?? '#fff3d0', (1 - t) * 5);
+          }
+        }
       }
     } else if (kind === 'thrust') {
       reach += swinging ? Math.sin(t * Math.PI) * 26 : 0;
+      if (swinging) this.renderThrust(c, hx, hy, p.swingAim, reach, f.range, t);
     } else if (kind === 'fist') {
       this.renderFist(c, swinging, t, hx, hy);
       return;
@@ -2193,6 +2227,119 @@ export class Game {
     } else {
       drawSprite(c, b.sprite, px, py, 1.6, { anchor: 'feet', rot: ang + Math.PI / 2 });
     }
+  }
+
+  /**
+   * 초승달 모양 궤적. tail에서 head로 갈수록 두꺼워지고 진해진다.
+   * 바깥 가장자리에 밝은 날빛, 그 바깥에 색 번짐(희귀 이상은 등급 색)을 더한다.
+   */
+  private renderSwoosh(c: CanvasRenderingContext2D, cx: number, cy: number, rIn: number, rOut: number,
+    tail: number, head: number, color: string, glow: string, alpha: number) {
+    const span = head - tail;
+    if (Math.abs(span) < 0.02 || alpha <= 0) return;
+    const N = Math.max(8, Math.ceil(Math.abs(span) * 14));
+    const at = (u: number) => tail + span * u;
+    const inner = (u: number) => rOut - (rOut - rIn) * Math.pow(u, 0.7); // 꼬리는 가늘게
+    c.save();
+    // 꼬리(0)에서 머리(1)로 갈수록 진해지는 원뿔형 그라데이션. 조각으로 나눠 그리면 이음새가 보여서 한 도형으로 칠한다.
+    const frac = Math.min(1, Math.abs(span) / (Math.PI * 2));
+    const ramp = (col: string, peak: number, pow: number) => {
+      const g = c.createConicGradient(span > 0 ? tail : head, cx, cy);
+      for (let k = 0; k <= 8; k++) {
+        const u = k / 8;
+        g.addColorStop((span > 0 ? u : 1 - u) * frac, withAlpha(col, peak * Math.pow(u, pow)));
+      }
+      if (frac < 1) g.addColorStop(Math.min(1, frac + 0.002), withAlpha(col, 0));
+      return g;
+    };
+    c.globalAlpha = alpha;
+    // 1) 바깥 색 번짐
+    c.globalCompositeOperation = 'lighter';
+    c.strokeStyle = ramp(glow, 0.6, 1.6);
+    c.lineWidth = 9;
+    c.beginPath();
+    c.arc(cx, cy, rOut + 1, tail, head, span < 0);
+    c.stroke();
+    c.globalCompositeOperation = 'source-over';
+    // 2) 몸통: 바깥 호를 따라가고 안쪽은 꼬리로 갈수록 가늘어진다.
+    c.fillStyle = ramp(color, 0.72, 1.4);
+    c.beginPath();
+    c.arc(cx, cy, rOut, tail, head, span < 0);
+    for (let i = N; i >= 0; i--) {
+      const u = i / N;
+      c.lineTo(cx + Math.cos(at(u)) * inner(u), cy + Math.sin(at(u)) * inner(u));
+    }
+    c.closePath();
+    c.fill();
+    // 3) 바깥 날빛: 머리 쪽으로 갈수록 밝은 선
+    c.strokeStyle = ramp('#ffffff', 0.95, 3);
+    c.lineWidth = 2;
+    c.beginPath();
+    c.arc(cx, cy, rOut, tail, head, span < 0);
+    c.stroke();
+    c.restore();
+  }
+
+  /** 네 갈래 섬광 */
+  private renderStar(c: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, alpha: number) {
+    if (alpha <= 0) return;
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    c.globalAlpha = Math.min(1, alpha);
+    c.fillStyle = color;
+    c.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 4;
+      const rr = i % 2 === 0 ? r : r * 0.22;
+      c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    c.closePath();
+    c.fill();
+    c.restore();
+  }
+
+  /** 찌르기: 손에서 창끝까지 가늘어지는 잔상과 양옆 속도선, 끝까지 뻗은 순간의 섬광 */
+  private renderThrust(c: CanvasRenderingContext2D, hx: number, hy: number, a: number, reach: number, range: number, t: number) {
+    const ec = this.elementColor();
+    const color = ec ?? '#e8f0ff';
+    const ext = Math.sin(t * Math.PI);
+    const tip = reach + range * 0.55 * ext;
+    const ux = Math.cos(a);
+    const uy = Math.sin(a);
+    const nx = -uy;
+    const ny = ux;
+    const back = Math.max(4, tip - range * 0.75);
+    c.save();
+    c.globalAlpha = 0.55 * ext;
+    c.fillStyle = color;
+    c.beginPath();
+    c.moveTo(hx + ux * back, hy + uy * back);
+    c.lineTo(hx + ux * (tip - 8) + nx * 5, hy + uy * (tip - 8) + ny * 5);
+    c.lineTo(hx + ux * tip, hy + uy * tip);
+    c.lineTo(hx + ux * (tip - 8) - nx * 5, hy + uy * (tip - 8) - ny * 5);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = '#ffffff';
+    c.lineWidth = 1.5;
+    c.globalAlpha = 0.8 * ext;
+    c.beginPath();
+    c.moveTo(hx + ux * (back + 6), hy + uy * (back + 6));
+    c.lineTo(hx + ux * tip, hy + uy * tip);
+    c.stroke();
+    // 양옆 속도선
+    c.strokeStyle = color;
+    c.lineWidth = 1;
+    for (const sd of [-1, 1]) {
+      c.globalAlpha = 0.45 * ext;
+      const o = 9 * sd;
+      const s0 = back + 4 + (sd > 0 ? 6 : 0);
+      c.beginPath();
+      c.moveTo(hx + ux * s0 + nx * o, hy + uy * s0 + ny * o);
+      c.lineTo(hx + ux * (tip - 14) + nx * o * 0.6, hy + uy * (tip - 14) + ny * o * 0.6);
+      c.stroke();
+    }
+    c.restore();
+    if (ext > 0.8) this.renderStar(c, hx + ux * (tip + 4), hy + uy * (tip + 4), 6 + (ext - 0.8) * 40, color, (ext - 0.8) * 4);
   }
 
   /** 건틀릿: 좌우 주먹을 번갈아 조준 방향으로 내지른다. */
@@ -2220,6 +2367,7 @@ export class Game {
         c.stroke();
       }
     }
+    if (swinging && punch > 0.75) this.renderStar(c, x + Math.cos(a) * 14, y + Math.sin(a) * 14, 5 + punch * 8, this.elementColor() ?? '#fff1c8', (punch - 0.75) * 4);
     // 반대 손은 몸 가까이 둔다.
     drawIcon(c, this.weapon.base.sprite, hx + Math.cos(a) * 10 - nx * side, hy + Math.sin(a) * 10 - ny * side, 14);
     drawIcon(c, this.weapon.base.sprite, x, y, 18);
@@ -2235,18 +2383,37 @@ export class Game {
       drawIcon(c, b.sprite, hand.x + Math.cos(a + 1.2) * 6, hand.y + Math.sin(a + 1.2) * 6, 18);
       return;
     }
-    const ext = Math.sin(Math.min(1, t * 1.25) * Math.PI); // 빠르게 뻗고 천천히 감긴다
-    const len = this.form().range * ext;
+    const range = this.form().range;
     const nx = -Math.sin(a);
     const ny = Math.cos(a);
-    const wave = Math.sin(t * Math.PI * 3) * 18 * (1 - t) * p.swingDir;
-    const pts: { x: number; y: number }[] = [];
-    for (let i = 0; i <= 12; i++) {
-      const k = i / 12;
-      const off = Math.sin(k * Math.PI) * wave;
-      pts.push({ x: hand.x + Math.cos(a) * len * k + nx * off, y: hand.y + Math.sin(a) * len * k + ny * off });
-    }
+    const curve = (tt: number) => {
+      const ext = Math.sin(Math.min(1, tt * 1.25) * Math.PI); // 빠르게 뻗고 천천히 감긴다
+      const len = range * ext;
+      const wave = Math.sin(tt * Math.PI * 3) * 18 * (1 - tt) * p.swingDir;
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i <= 12; i++) {
+        const k = i / 12;
+        const off = Math.sin(k * Math.PI) * wave;
+        pts.push({ x: hand.x + Math.cos(a) * len * k + nx * off, y: hand.y + Math.sin(a) * len * k + ny * off });
+      }
+      return { pts, ext };
+    };
     const ec = this.elementColor();
+    // 잔상: 조금 전 모양을 옅게 겹쳐 그린다.
+    c.lineCap = 'round';
+    c.strokeStyle = ec ?? '#e8c89a';
+    for (let g = 3; g >= 1; g--) {
+      const tt = t - g * 0.045;
+      if (tt <= 0) continue;
+      const gp = curve(tt).pts;
+      c.globalAlpha = 0.16 * (4 - g) / 3;
+      c.lineWidth = 3;
+      c.beginPath();
+      gp.forEach((q, i) => (i ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y)));
+      c.stroke();
+    }
+    c.globalAlpha = 1;
+    const { pts, ext } = curve(t);
     c.lineCap = 'round';
     c.strokeStyle = '#1e120c';
     c.lineWidth = 6;
@@ -2260,10 +2427,7 @@ export class Game {
     const tip = pts[pts.length - 1];
     if (ext > 0.85) {
       // 끝에서 터지는 소리 표시
-      c.fillStyle = ec ?? '#fff1c8';
-      c.beginPath();
-      c.arc(tip.x, tip.y, 4 + (ext - 0.85) * 30, 0, Math.PI * 2);
-      c.fill();
+      this.renderStar(c, tip.x, tip.y, 8 + (ext - 0.85) * 60, ec ?? '#fff1c8', (ext - 0.85) * 6);
     }
     drawIcon(c, b.sprite, hand.x, hand.y, 16);
   }
