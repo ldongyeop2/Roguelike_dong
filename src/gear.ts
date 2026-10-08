@@ -62,7 +62,17 @@ export interface WeaponBase extends GearBaseCommon {
   range: number; // 근접 사거리(px)
   arc: number; // 근접 범위(라디안)
   knock: number;
+  /** 무기 고유 특징 */
+  trait?: WeaponTrait;
 }
+
+/** combo: 연격. 같은 적을 연속으로 맞히면 피해가 쌓인다. */
+export type WeaponTrait = 'combo';
+/** 연격: 한 번 맞힐 때마다 오르는 피해, 최대 중첩, 중첩이 유지되는 시간(초) */
+export const COMBO = { step: 0.12, max: 5, keep: 0.8 };
+export const TRAIT_LINE: Record<WeaponTrait, string> = {
+  combo: `연격: 같은 적을 ${COMBO.keep}초 안에 다시 맞히면 피해 +${COMBO.step * 100}%씩 (최대 +${COMBO.step * COMBO.max * 100}%)`,
+};
 
 export interface ArmorBase extends GearBaseCommon {
   slot: Exclude<Slot, 'weapon'>;
@@ -73,11 +83,11 @@ export type GearBase = WeaponBase | ArmorBase;
 const wpn = (
   id: string, name: string, sprite: IconRef, wkind: WeaponKind,
   dmg: number, cd: number, range: number, arc: number, knock: number,
-  extra: Partial<Pick<WeaponBase, 'stats' | 'unlock' | 'desc'>> = {},
+  extra: Partial<Pick<WeaponBase, 'stats' | 'unlock' | 'desc' | 'trait'>> = {},
 ): WeaponBase => ({
   kind: 'gear', slot: 'weapon', id, name, sprite, wkind, dmg, cd, range, arc, knock,
-  stats: extra.stats ?? {}, unlock: extra.unlock,
-  desc: extra.desc ?? `${WKIND_LABEL[wkind]} | 피해 ${dmg} | 공격 간격 ${cd}초`,
+  stats: extra.stats ?? {}, unlock: extra.unlock, trait: extra.trait,
+  desc: extra.desc ?? `${WKIND_LABEL[wkind]} | 피해 ${dmg} | 공격 간격 ${cd}초${extra.trait ? ` | ${TRAIT_LINE[extra.trait]}` : ''}`,
 });
 
 export const WKIND_LABEL: Record<WeaponKind, string> = {
@@ -95,7 +105,8 @@ export const WEAPONS: WeaponBase[] = [
   wpn('iron_sword', '철검', 'w_iron', 'slash', 20, 0.42, 78, 1.9, 220),
   wpn('knight_sword', '한손검', 'w_knight', 'slash', 24, 0.48, 82, 1.9, 240),
   wpn('saw_sword', '톱날검', 'w_serrated', 'slash', 21, 0.44, 80, 1.8, 200, { stats: { crit: 0.05 } }),
-  wpn('dagger', '단검', 'w_dagger', 'slash', 12, 0.22, 60, 1.4, 120),
+  // 단검: 사거리가 가장 짧은 대신 빠르고 치명타가 잘 터지며, 한 적에 붙어 연속으로 베면 피해가 쌓인다.
+  wpn('dagger', '단검', 'w_dagger', 'slash', 14, 0.22, 60, 1.4, 40, { stats: { crit: 0.1 }, trait: 'combo' }),
   wpn('hatchet', '손도끼', 'w_hatchet', 'slash', 17, 0.32, 66, 1.6, 200),
   wpn('cleaver', '도살칼', 'w_cleaver', 'slash', 23, 0.46, 70, 1.7, 220, { stats: { lifesteal: 0.01 } }),
   wpn('rapier', '레이피어', 'w_iron', 'thrust', 17, 0.28, 100, 0.55, 150),
@@ -222,6 +233,7 @@ export function gearLines(g: Gear): string[] {
   const lines: string[] = [];
   if (g.base.slot === 'weapon') {
     lines.push(`${WKIND_LABEL[g.base.wkind]} | 피해 ${g.dmg} | 간격 ${g.base.cd}초`);
+    if (g.base.trait) lines.push(TRAIT_LINE[g.base.trait]);
   } else {
     lines.push(SLOT_LABEL[g.base.slot]);
   }

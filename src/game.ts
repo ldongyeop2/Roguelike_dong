@@ -3,7 +3,7 @@ import {
   type CharDef, type Mods,
 } from './content';
 import {
-  GEAR_BASES, RARITY, SLOTS, gearLines, gearTitle, makeGear, rollRarity, weaponById,
+  COMBO, GEAR_BASES, RARITY, SLOTS, gearLines, gearTitle, makeGear, rollRarity, weaponById,
   type Gear, type GearStats, type Slot, type StatKey, type WeaponBase, type WeaponKind,
 } from './gear';
 import type { Input } from './input';
@@ -118,6 +118,7 @@ interface Enemy {
   adapt: Trait | null; // 플레이어 성향에 맞춰 얻은 대응
   adaptCd: number; // 대응 행동 재사용 대기
   face: number; // 정면 방패가 향하는 각도(천천히 돈다)
+  comboN: number; comboT: number; // 단검 연격 중첩과 유지 시간
   dead: boolean;
 }
 
@@ -408,7 +409,7 @@ export class Game {
   private makeEnemy(kind: EnemyKind, x: number, y: number, hpMul: number): Enemy {
     const base = {
       id: this.nextId++, x, y, kx: 0, ky: 0, spawnT: 0.9, cd: rand(0.6, 1.6), state: 0, st: 0,
-      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, act: 0, actKind: 'attack' as const, bphase: 1, phaseT: 0, dashLeft: 0, adapt: null, adaptCd: rand(1.5, 3), face: 0, dead: false,
+      dx: 0, dy: 0, burnT: 0, burnDps: 0, poisonT: 0, poisonStacks: 0, frostT: 0, orbitCd: 0, flash: 0, tier: 0, pattern: 0, spiralT: 0, act: 0, actKind: 'attack' as const, bphase: 1, phaseT: 0, dashLeft: 0, adapt: null, adaptCd: rand(1.5, 3), face: 0, comboN: 0, comboT: 0, dead: false,
     };
     if (kind === 'boss') {
       const tier = Math.floor(this.room / BOSS_EVERY);
@@ -1093,9 +1094,12 @@ export class Game {
       if (e.spawnT > 0 || e.dead) continue;
       if (dist(e.x, e.y, p.x, p.y) > range + e.r) continue;
       if (f.kind !== 'spin' && angDiff(Math.atan2(e.y - p.y, e.x - p.x), p.aim) > f.arc / 2 + 0.15) continue;
+      // 연격: 같은 적을 연속으로 맞히면 피해가 쌓인다.
+      const combo = b.trait === 'combo' ? 1 + COMBO.step * e.comboN : 1;
       this.hitSrc = 'melee';
-      this.hurtEnemy(e, dmg, true);
+      this.hurtEnemy(e, dmg * combo, true);
       this.hitSrc = 'other';
+      if (b.trait === 'combo') { e.comboN = Math.min(COMBO.max, e.comboN + 1); e.comboT = COMBO.keep; }
       if (e.adapt === 'melee' && e.adaptCd <= 0) { e.adaptCd = 0.45; this.thornPrick(e); }
       // 회전 베기는 바깥쪽으로 밀어낸다.
       const ka = f.kind === 'spin' ? Math.atan2(e.y - p.y, e.x - p.x) : p.aim;
@@ -1168,6 +1172,7 @@ export class Game {
     for (const e of this.enemies) {
       if (e.dead) continue;
       e.flash = Math.max(0, e.flash - dtReal);
+      if (e.comboT > 0 && (e.comboT -= dtReal) <= 0) e.comboN = 0;
       e.orbitCd = Math.max(0, e.orbitCd - dtReal);
       if (e.spawnT > 0) { e.spawnT -= dtReal; continue; }
 
@@ -1849,6 +1854,16 @@ export class Game {
         if (!rage) drawSprite(c, key, e.x, feet, scale, opts);
       }
       if (e.adapt) this.renderAdapt(c, e, feet - S[key].h * scale);
+      if (e.comboN > 0) {
+        // 연격 중첩: 체력 바 위 작은 칸, 유지 시간이 줄면 흐려진다.
+        const top = feet - S[key].h * scale - 12;
+        c.globalAlpha = 0.4 + 0.6 * (e.comboT / COMBO.keep);
+        for (let i = 0; i < COMBO.max; i++) {
+          c.fillStyle = i < e.comboN ? (e.comboN >= COMBO.max ? '#ff5a7a' : '#e8c060') : '#0008';
+          c.fillRect(e.x - COMBO.max * 3.5 + i * 7, top, 5, 3);
+        }
+        c.globalAlpha = 1;
+      }
       if (e.kind !== 'boss' && e.hp < e.maxHp) {
         const top = feet - S[key].h * scale - 6;
         c.fillStyle = '#000a';
