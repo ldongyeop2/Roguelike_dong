@@ -81,6 +81,8 @@ const ENEMY: Record<Exclude<EnemyKind, 'boss'>, EnemyStat> = {
   seer: { hp: 20, r: 11, speed: 58, dmg: 12, color: '#b05ad0', cost: 2.5, minRoom: 99 },
 };
 /** 예견자 사격: 조준 시간, 재사용 대기, 탄속, 예측 최대 시간(초) */
+/** 스킬 쿨타임 배율 하한(모든 감소 합산) */
+const SKILL_CD_FLOOR = 0.4;
 const SEER = { aim: 0.55, cd: 2.3, speed: 270, lead: 1.8 };
 /** 장판 공격: 반지름, 터지기까지 시간 */
 const ZONE = { r: 52, delay: 1.0 };
@@ -200,6 +202,8 @@ export class Game {
   private chest: { x: number; y: number; openT: number; looted: boolean } | null = null;
   private nearChest = false;
   private pickedUids = new Set<number>();
+  private hpGranted = new Set<number>(); // 최대 체력 증가분을 이미 회복해 준 장비
+  private ownHpPrev = 0; // 직전 recalc의 직업 + 아이템 최대 체력
   private parts: Particle[] = [];
   private shake = 0;
   private hurtFlash = 0; // 피격 시 화면 붉은 번쩍임
@@ -738,10 +742,19 @@ export class Game {
     }
     this.gs = z;
     const p = this.p;
-    const prev = p.maxHp;
-    p.maxHp = Math.max(10, Math.round(this.baseHp + this.m.maxHp + z.maxHp));
-    if (p.maxHp > prev) p.hp += p.maxHp - prev;
-    p.hp = Math.min(p.hp, p.maxHp);
+    // 최대 체력이 오른 만큼 회복하되, 장비는 처음 낄 때 한 번만 회복한다(바꿔 끼기 반복 회복 방지).
+    // 직업과 아이템으로 오른 최대 체력은 그대로 회복한다.
+    const own = this.baseHp + this.m.maxHp;
+    let gain = Math.max(0, own - this.ownHpPrev);
+    this.ownHpPrev = own;
+    for (const slot of SLOTS) {
+      const g = this.equip[slot];
+      if (!g || this.hpGranted.has(g.uid)) continue;
+      this.hpGranted.add(g.uid);
+      gain += Math.max(0, g.stats.maxHp ?? 0);
+    }
+    p.maxHp = Math.max(10, Math.round(own + z.maxHp));
+    p.hp = Math.min(p.hp + gain, p.maxHp);
   }
 
   private get weapon(): Gear & { base: WeaponBase } {
@@ -749,7 +762,8 @@ export class Game {
   }
 
   private skillCdMul(): number {
-    return this.m.skillCd * Math.max(0.4, 1 - this.gs.skillCd);
+    // 아이템(모래시계)과 장비 감소를 합쳐도 원래 쿨타임의 40% 아래로는 내려가지 않는다.
+    return Math.max(SKILL_CD_FLOOR, this.m.skillCd * Math.max(0.4, 1 - this.gs.skillCd));
   }
 
   /** 일시정지 화면용 장비 목록 */
@@ -1099,7 +1113,7 @@ export class Game {
       this.hitSrc = 'melee';
       this.hurtEnemy(e, dmg * combo, true);
       this.hitSrc = 'other';
-      if (b.trait === 'combo') { e.comboN = Math.min(COMBO.max, e.comboN + 1); e.comboT = COMBO.keep; }
+      if (b.trait === 'combo' && e.phaseT <= 0 && !e.dead) { e.comboN = Math.min(COMBO.max, e.comboN + 1); e.comboT = COMBO.keep; }
       if (e.adapt === 'melee' && e.adaptCd <= 0) { e.adaptCd = 0.45; this.thornPrick(e); }
       // 회전 베기는 바깥쪽으로 밀어낸다.
       const ka = f.kind === 'spin' ? Math.atan2(e.y - p.y, e.x - p.x) : p.aim;
@@ -1178,7 +1192,8 @@ export class Game {
 
       // 지속 피해: 독연 시너지면 화상과 독이 함께 걸린 적은 2배
       const both = this.has('toxic_fire') && e.burnT > 0 && e.poisonT > 0 ? 2 : 1;
-      const resist = e.adapt === 'element' ? 0.35 : 1; // 원소 저항
+      // 원소 저항, 2페이즈 포효 중에는 지속 피해도 들어가지 않는다.
+      const resist = e.phaseT > 0 ? 0 : e.adapt === 'element' ? 0.35 : 1;
       if (e.burnT > 0) {
         e.burnT -= dtReal;
         e.hp -= e.burnDps * both * resist * dtReal;
@@ -1192,6 +1207,7 @@ export class Game {
         if (e.poisonT <= 0) e.poisonStacks = 0;
         if (Math.random() < dtReal * 6) this.burst(e.x + rand(-e.r, e.r), e.y, 1, '#8ae06a', 20, { grav: -50, size: 3, life: 0.6, glow: false });
       }
+      this.bossPhaseGate(e);
       if (e.hp <= 0) { this.killEnemy(e); continue; }
       e.frostT = Math.max(0, e.frostT - dtReal * (e.adapt === 'element' ? 2.5 : 1));
       const dt = e.frostT > 0 ? dtE * 0.6 : dtE;
@@ -1554,6 +1570,7 @@ export class Game {
       d *= 0.7; // 도박꾼의 주사위: 치명타가 아니면 약해진다.
     }
     e.hp -= d;
+    this.bossPhaseGate(e);
     e.flash = 0.1;
     if (fromPlayer && this.phase === 'playing') {
       if (this.hitSrc === 'melee') this.log.melee += d;
@@ -1580,6 +1597,13 @@ export class Game {
       }
     }
     if (e.hp <= 0) this.killEnemy(e, proc);
+  }
+
+  /** 1페이즈 보스는 체력 50%에서 멈추고 바로 2페이즈로 넘어간다(한 방에 2페이즈를 건너뛰지 못하게). */
+  private bossPhaseGate(e: Enemy) {
+    if (e.kind !== 'boss' || e.bphase !== 1 || e.hp > e.maxHp * 0.5) return;
+    e.hp = e.maxHp * 0.5;
+    this.enterPhase2(e);
   }
 
   /** 범위 폭발(효과 피해) */
