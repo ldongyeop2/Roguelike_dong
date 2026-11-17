@@ -65,13 +65,13 @@ export function initUI() {
     if (!el) return;
     act(el.dataset.act!, el.dataset.arg || '');
   });
-  if (!localStorage.getItem('chimera-tales-help')) {
-    win = 'help';
-    try {
+  try {
+    if (!localStorage.getItem('chimera-tales-help')) {
+      win = 'help';
       localStorage.setItem('chimera-tales-help', '1');
-    } catch {
-      // 무시
     }
+  } catch {
+    win = 'help';
   }
 }
 
@@ -89,7 +89,8 @@ function act(a: string, arg: string) {
     case 'sell': sellStone(n); break;
     case 'toggle': togglePet(n); break;
     case 'release':
-      if (confirm('정말 이 동료를 놓아주시겠습니까?')) releasePet(n);
+      if (armed === a + arg) releasePet(n);
+      else return arm(a + arg);
       break;
     case 'buy': buy(arg); break;
     case 'pick':
@@ -102,11 +103,21 @@ function act(a: string, arg: string) {
       if (doMix(mixA, mixB)) mixA = mixB = 0;
       break;
     case 'reset':
-      if (confirm('저장된 진행을 모두 지우고 처음부터 시작할까요?')) resetSave();
+      if (armed === a) resetSave();
+      else return arm(a);
       break;
   }
+  armed = '';
   G.dirty = true;
 }
+
+/** 되돌릴 수 없는 동작은 같은 버튼을 한 번 더 눌러야 실행한다. */
+let armed = '';
+function arm(key: string) {
+  armed = key;
+  G.dirty = true;
+}
+const sure = (key: string, label: string) => (armed === key ? '한 번 더 눌러 확인' : label);
 
 const bar = (cls: string, v: number, max: number, text = '') =>
   `<div class="bar ${cls}"><i style="width:${Math.max(0, Math.min(100, (v / max) * 100)).toFixed(1)}%"></i><span>${text}</span></div>`;
@@ -141,7 +152,7 @@ function renderWin(): string {
   if (win === 'pets') {
     const cards = G.pets
       .map((p) => petCard(p.uid, `<button data-act="toggle" data-arg="${p.uid}">${p.active ? '대기' : '출전'}</button>
-        <button class="sub" data-act="release" data-arg="${p.uid}">방생</button>`, p.active ? 'on' : ''))
+        <button class="sub" data-act="release" data-arg="${p.uid}">${sure('release' + p.uid, '방생')}</button>`, p.active ? 'on' : ''))
       .join('');
     return `${head(`동료 (${G.pets.length}/${MAX_PETS}, 출전 ${MAX_ACTIVE}마리까지)`)}<div class="body">${cards || '<p class="dim">동료가 없습니다.</p>'}</div>`;
   }
@@ -195,7 +206,7 @@ function renderWin(): string {
       <p><b>동료</b> 몬스터를 쓰러뜨리면 가끔 혼석이 나옵니다. 가방에서 혼석을 쓰면 그 몬스터가 동료가 되고, 3마리까지 함께 싸웁니다.</p>
       <p><b>조합</b> 마을의 조합사에게 가서 일정 레벨 이상의 동료 둘을 조합하면 더 강한 새 몬스터가 태어납니다.</p>
       <p><b>마을</b> 상인에게서 물약과 장비를 사고, 치료사에게서 무료로 회복할 수 있습니다. 미니맵의 파란 점이 다음 지역으로 가는 포탈입니다.</p>
-      <button class="sub" data-act="reset">처음부터 다시 시작</button></div>`;
+      <button class="sub" data-act="reset">${sure('reset', '처음부터 다시 시작')}</button></div>`;
   }
   return '';
 }

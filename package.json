@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:single": "npm run build && node scripts/build-artifact.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

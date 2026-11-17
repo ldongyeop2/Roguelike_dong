@@ -1,9 +1,10 @@
 * { box-sizing: border-box; }
+:root { color-scheme: dark; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #1b2a1f; }
 body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; font-size: 13px; color: #f4efe2; user-select: none; }
 #app { position: fixed; inset: 0; }
 #game { display: block; width: 100%; height: 100%; touch-action: none; }
-#ui { position: absolute; inset: 0; pointer-events: none; }
+#ui { position: absolute; inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); pointer-events: none; }
 #ui button, #win .window { pointer-events: auto; }
 
 .frame {
@@ -89,8 +90,14 @@ button.big { display: block; margin: 8px auto; padding: 8px 30px; font-weight: b
 .recipe span small { display: block; color: #aab0c8; font-size: 10px; }
 .help p { margin: 7px 0; line-height: 1.5; }
 
+#menu button { white-space: nowrap; }
+
 @media (max-width: 720px) {
-  #hud-tr { transform: scale(0.8); transform-origin: top right; }
-  #target { top: 120px; }
-  #log { bottom: 74px; }
+  #hud-tl { width: 190px; }
+  #hud-tr { transform: scale(0.68); transform-origin: top right; }
+  #target { top: auto; bottom: 122px; width: 200px; }
+  #log { bottom: 176px; width: 80vw; font-size: 11.5px; }
+  #bottom { width: 100%; flex-wrap: wrap; justify-content: center; gap: 4px; }
+  #menu kbd { display: none; }
+  #menu button { height: 34px; }
 }
