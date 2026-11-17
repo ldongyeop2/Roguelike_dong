@@ -35,6 +35,8 @@ export interface Actor {
   atkCd: number;
   target: Actor | null;
   face: 1 | -1;
+  /** 바라보는 방향 0..7 (타일 좌표 기준 45도 단위, 0이 +x) */
+  dir: number;
   back: boolean;
   moving: boolean;
   anim: number;
@@ -117,7 +119,7 @@ export function log(m: string, c = '') {
 function makeActor(type: Actor['type'], name: string, x: number, y: number): Actor {
   return {
     id: nextId++, type, name, x, y, path: [], spd: 3, hp: 1, maxHp: 1, atk: 1, def: 0, range: 1.3, atkInt: 1.3, atkCd: 0,
-    target: null, face: 1, back: false, moving: false, anim: Math.random() * 10, atkAnim: 0, flash: 0, dead: false, deadT: 0,
+    target: null, face: 1, dir: 1, back: false, moving: false, anim: Math.random() * 10, atkAnim: 0, flash: 0, dead: false, deadT: 0,
     lv: 1, repath: 0, think: rand(0, 3), homeX: x, homeY: y, returning: false,
   };
 }
@@ -216,6 +218,7 @@ function spawnMob(spawn: SpawnDef) {
   a.atkInt = sp.boss ? 1.5 : 1.4;
   a.spawn = spawn;
   a.face = Math.random() < 0.5 ? 1 : -1;
+  a.dir = randInt(0, 7);
   G.actors.push(a);
 }
 
@@ -320,6 +323,7 @@ function setFacing(a: Actor, dx: number, dy: number) {
   const sy = dx + dy;
   if (Math.abs(sx) > 0.02) a.face = sx > 0 ? 1 : -1;
   a.back = sy < -0.02;
+  a.dir = (Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) + 8) % 8;
 }
 
 function stepPath(a: Actor, dt: number, mul = 1) {

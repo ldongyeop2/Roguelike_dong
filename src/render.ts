@@ -1,5 +1,7 @@
 import { drawHuman, drawMonster, drawShadow, getSprite, type HumanLook } from './art';
+import { ANIM, type Sheet } from './bake';
 import { G, type Actor } from './game';
+import { npcSheet, objectSheet, playerSheet, retainSpecies, speciesSheet } from './sprites';
 import { hash2, mulberry32, shade } from './util';
 import { Tile, type Zone } from './world';
 
@@ -10,6 +12,9 @@ const TILE_COL = ['#72b34c', '#5c9d40', '#b08a58', '#e2cb8c', '#4aa3d8', '#a9abb
 /** 경계에서 어느 지형이 위로 덮이는지 (클수록 위) */
 const PRIO = [6, 7, 3, 2, 0, 1, 5, 4, 3];
 const BG = { town: '#2f5a2c', meadow: '#2f5a2c', forest: '#22442a', waste: '#6a5236', snow: '#8fa3b8' };
+
+/** 계열별 머리 높이 (화면 픽셀, 크기 1 기준) */
+const KIND_H = { blob: 30, beast: 44, bird: 54, bug: 28, plant: 46, golem: 54, imp: 50 };
 
 const PLAYER_LOOK: HumanLook = { hair: '#c8502f', top: '#3f6fd0', bottom: '#4a4a5f', skin: '#ffe0c0', sword: true };
 
@@ -152,6 +157,7 @@ export class Renderer {
   ctx: CanvasRenderingContext2D;
   grounds = new Map<string, HTMLCanvasElement>();
   scale = 1;
+  zoneId = '';
   camX = 0;
   camY = 0;
   W = 0;
@@ -199,7 +205,7 @@ export class Renderer {
       const s = a.sp ? a.sp.size : 1;
       const sx = (a.x - a.y) * HW;
       const sy = (a.x + a.y) * HH;
-      if (Math.abs(px - sx) < 20 * s + 4 && py > sy - 52 * s - 6 && py < sy + 10) {
+      if (Math.abs(px - sx) < 24 * s + 4 && py > sy - 62 * s - 8 && py < sy + 12) {
         const d = a.x + a.y;
         if (d > bd) {
           bd = d;
@@ -215,6 +221,10 @@ export class Renderer {
     const z = G.zone;
     const p = G.player;
     const s = this.scale;
+    if (this.zoneId !== z.def.id) {
+      this.zoneId = z.def.id;
+      retainSpecies(new Set([...z.def.spawns.map((q) => q.sp), ...G.pets.filter((q) => q.active).map((q) => q.sp)]));
+    }
     this.camX = (p.x - p.y) * HW;
     this.camY = (p.x + p.y) * HH - 24;
     c.setTransform(1, 0, 0, 1, 0, 0);
@@ -263,8 +273,12 @@ export class Renderer {
     for (const it of list) {
       if (it.o) {
         const o = it.o;
-        const sp = getSprite(o.type, o.v);
-        c.drawImage(sp.c, (o.x - o.y) * HW - sp.ax, (o.x + o.y) * HH - sp.ay, sp.w, sp.h);
+        const sh = objectSheet(o.type, o.v);
+        if (sh) c.drawImage(sh.c, (o.x - o.y) * HW - sh.ax, (o.x + o.y) * HH - sh.ay, sh.fw, sh.fh);
+        else {
+          const sp = getSprite(o.type, o.v);
+          c.drawImage(sp.c, (o.x - o.y) * HW - sp.ax, (o.x + o.y) * HH - sp.ay, sp.w, sp.h);
+        }
       } else this.drawActor(it.a!);
     }
 
@@ -339,24 +353,36 @@ export class Renderer {
       c.lineWidth = 2.2;
       c.stroke();
     }
-    drawShadow(c, 13 * size);
+    const sheet: Sheet | null = a.type === 'player' ? playerSheet() : a.type === 'npc' ? npcSheet(a.npc!) : speciesSheet(a.sp!.id);
+    drawShadow(c, (sheet ? 15 : 13) * size);
 
     c.save();
     // 공격 시 대상 쪽으로 살짝 튀어나간다.
-    if (a.atkAnim > 0) {
+    if (a.atkAnim > 0 && !sheet) {
       const k = Math.sin((1 - a.atkAnim / 0.28) * Math.PI) * 7;
       c.translate(a.face * k, -k * 0.2);
     }
-    c.scale(a.face, 1);
-    if (a.flash > 0) c.filter = 'brightness(2.4)';
+    if (a.flash > 0) c.filter = 'brightness(2.2)';
     const opts = { moving: a.moving, atk: a.atkAnim > 0 ? 1 - a.atkAnim / 0.28 : 0, back: a.back };
-    if (a.type === 'player') drawHuman(c, PLAYER_LOOK, a.anim, opts);
-    else if (a.type === 'npc') drawHuman(c, { hair: a.npc!.hair, top: a.npc!.top, bottom: '#5a4a3f', skin: '#ffe0c0', sword: false }, a.anim, { moving: false, atk: 0 });
-    else drawMonster(c, a.sp!, a.anim, opts);
+    if (sheet) {
+      let col = 0;
+      if (sheet.c.width > sheet.fw * sheet.ratio + 1) {
+        if (a.atkAnim > 0) col = ANIM[2].start + Math.min(2, Math.floor((1 - a.atkAnim / 0.28) * 3));
+        else if (a.moving) col = ANIM[1].start + (Math.floor(a.anim * 11) % 6);
+        else col = [0, 1, 2, 1][Math.floor(a.anim * 3.2) % 4];
+      }
+      const fp = Math.round(sheet.fw * sheet.ratio);
+      c.drawImage(sheet.c, col * fp, (a.dir % sheet.dirs) * fp, fp, fp, -sheet.ax, -sheet.ay, sheet.fw, sheet.fh);
+    } else {
+      c.scale(a.face, 1);
+      if (a.type === 'player') drawHuman(c, PLAYER_LOOK, a.anim, opts);
+      else if (a.type === 'npc') drawHuman(c, { hair: a.npc!.hair, top: a.npc!.top, bottom: '#5a4a3f', skin: '#ffe0c0', sword: false }, a.anim, { moving: false, atk: 0 });
+      else drawMonster(c, a.sp!, a.anim, opts);
+    }
     c.restore();
 
     // 이름과 체력
-    const top = -(a.sp ? (a.sp.kind === 'golem' || a.sp.kind === 'imp' ? 54 : a.sp.kind === 'bird' ? 58 : 44) * size : 52);
+    const top = -(a.sp ? KIND_H[a.sp.kind] * size + (a.sp.feats.length ? 10 : 0) : a.type === 'npc' ? 96 : 82) - 4;
     c.textAlign = 'center';
     c.font = 'bold 11px sans-serif';
     c.lineWidth = 3;

@@ -1,4 +1,5 @@
 import { SPECIES, type Feature, type Species } from './data';
+import { speciesIcon3d } from './sprites';
 import { shade } from './util';
 
 type C = CanvasRenderingContext2D;
@@ -510,7 +511,7 @@ export function getSprite(type: string, v: number): Sprite {
 const icons = new Map<string, string>();
 /** UI용 몬스터 아이콘 (data URL) */
 export function speciesIcon(id: string): string {
-  let url = icons.get(id);
+  let url = icons.get(id) || speciesIcon3d(id) || undefined;
   if (!url) {
     const sp = SPECIES[id];
     const cv = document.createElement('canvas');
