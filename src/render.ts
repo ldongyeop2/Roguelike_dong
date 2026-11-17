@@ -7,6 +7,8 @@ const HW = 32;
 const HH = 16;
 
 const TILE_COL = ['#72b34c', '#5c9d40', '#b08a58', '#e2cb8c', '#4aa3d8', '#a9abb8', '#eef3f8', '#bfe3f2', '#cfb27c'];
+/** 경계에서 어느 지형이 위로 덮이는지 (클수록 위) */
+const PRIO = [6, 7, 3, 2, 0, 1, 5, 4, 3];
 const BG = { town: '#2f5a2c', meadow: '#2f5a2c', forest: '#22442a', waste: '#6a5236', snow: '#8fa3b8' };
 
 const PLAYER_LOOK: HumanLook = { hair: '#c8502f', top: '#3f6fd0', bottom: '#4a4a5f', skin: '#ffe0c0', sword: true };
@@ -108,6 +110,37 @@ function buildGround(z: Zone): HTMLCanvasElement {
           c.lineTo(px - HW, py + HH);
           c.closePath();
           c.stroke();
+        }
+      }
+    }
+  }
+  // 지형 경계: 우선순위가 높은 지형이 이웃 타일 안쪽으로 불규칙하게 번져 들어간다.
+  const NB = [[-1, 0], [0, -1], [1, 0], [0, 1]];
+  for (let y = 0; y < z.h; y++) {
+    for (let x = 0; x < z.w; x++) {
+      const t = z.tiles[y * z.w + x];
+      if (t === Tile.Water) continue;
+      const px = (x - y) * HW + ox;
+      const py = (x + y) * HH;
+      const V = [[px, py], [px + HW, py + HH], [px, py + HH * 2], [px - HW, py + HH]];
+      const E = [[3, 0], [0, 1], [1, 2], [2, 3]];
+      for (let k = 0; k < 4; k++) {
+        const nt = tileAt(x + NB[k][0], y + NB[k][1]);
+        if (nt < 0 || nt === t || nt === Tile.Water || PRIO[nt] <= PRIO[t]) continue;
+        const [a, b] = [V[E[k][0]], V[E[k][1]]];
+        c.fillStyle = TILE_COL[nt];
+        for (let i = 0; i < 7; i++) {
+          const u = (i + rng() * 0.8) / 7;
+          const r = 4 + rng() * 6;
+          const ex = a[0] + (b[0] - a[0]) * u;
+          const ey = a[1] + (b[1] - a[1]) * u;
+          // 타일 중심 쪽으로 살짝 들여서 그린다.
+          const cxp = px - ex;
+          const cyp = py + HH - ey;
+          const m = Math.hypot(cxp, cyp) || 1;
+          c.beginPath();
+          c.ellipse(ex + (cxp / m) * r * 0.3, ey + (cyp / m) * r * 0.15, r, r * 0.55, 0, 0, 7);
+          c.fill();
         }
       }
     }

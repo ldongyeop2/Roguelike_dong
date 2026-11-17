@@ -103,6 +103,8 @@ export const G = {
   dirty: true,
   uiRequest: '',
   hover: null as Actor | null,
+  /** 플레이어가 지나온 자리 (0.25타일 간격). 동료가 이 길을 따라온다. */
+  trail: [] as Pt[],
 };
 
 let nextId = 1;
@@ -226,6 +228,7 @@ export function enterZone(id: string, x: number, y: number, quiet = false) {
   G.fx = [];
   G.floats = [];
   G.hover = null;
+  G.trail = [];
   p.x = x;
   p.y = y;
   p.path = [];
@@ -411,7 +414,7 @@ function kill(t: Actor) {
     G.floats.push({ x: t.x, y: t.y - 0.3, text: `+${gold}G`, color: '#ffe27a', t: -0.25, big: false });
     if (Math.random() < stoneChance(sp)) {
       G.inv.stones.push({ sp: sp.id, lv: t.lv });
-      log(`${sp.name}의 혼석을 얻었습니다! (가방에서 사용)`, 'good');
+      log(`${sp.name}의 혼석을 얻었습니다! (혼석 가방 K)`, 'good');
       G.fx.push({ type: 'ring', x: t.x, y: t.y, tx: 0, ty: 0, t: 0, dur: 0.6, color: '#b98aff' });
     }
     const r = Math.random();
@@ -679,6 +682,7 @@ export function doMix(ua: number, ub: number): boolean {
 
 // ---------- 매 프레임 갱신 ----------
 
+const TRAIL_GAP = 4;
 const SLOTS: Pt[] = [{ x: -1.3, y: 0.6 }, { x: 0.6, y: -1.3 }, { x: -1.5, y: -1.5 }];
 
 function updatePet(a: Actor, dt: number, slot: number) {
@@ -718,16 +722,17 @@ function updatePet(a: Actor, dt: number, slot: number) {
     chase(a, a.target, dt);
     return;
   }
+  // 플레이어가 지나온 길 위에서 순번만큼 뒤처진 자리를 목표로 삼는다.
+  const k = G.trail.length - 1 - (slot + 1) * TRAIL_GAP;
   const o = SLOTS[slot % SLOTS.length];
-  const tx = p.x + o.x;
-  const ty = p.y + o.y;
-  const d = Math.hypot(tx - a.x, ty - a.y);
+  const q = k >= 0 ? G.trail[k] : { x: p.x + o.x, y: p.y + o.y };
+  const d = Math.hypot(q.x - a.x, q.y - a.y);
   a.repath -= dt;
-  if (d > 1.2 && a.repath <= 0) {
-    a.repath = 0.3;
-    a.path = findPath(G.zone, a.x, a.y, tx, ty) || [];
+  if (d > 0.3 && a.repath <= 0) {
+    a.repath = 0.15;
+    a.path = findPath(G.zone, a.x, a.y, q.x, q.y) || [];
   }
-  stepPath(a, dt, d > 4 ? 1.3 : 1);
+  stepPath(a, dt, d > 3 ? 1.35 : 1);
 }
 
 function updateMob(a: Actor, dt: number) {
@@ -830,6 +835,11 @@ export function update(dt: number) {
       if (a.dead) a.deadT += dt;
       else updateMob(a, dt);
     }
+  }
+  const last = G.trail[G.trail.length - 1];
+  if (!last || Math.hypot(p.x - last.x, p.y - last.y) >= 0.25) {
+    G.trail.push({ x: p.x, y: p.y });
+    if (G.trail.length > 60) G.trail.shift();
   }
   separate();
   G.actors = G.actors.filter((a) => !(a.type === 'mob' && a.dead && a.deadT > 0.7));

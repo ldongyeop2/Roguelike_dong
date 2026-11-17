@@ -47,6 +47,7 @@ addEventListener('keydown', (e) => {
     case 'q': usePotion('hp'); break;
     case 'e': usePotion('mp'); break;
     case 'i': openWin('bag'); break;
+    case 'k': openWin('stones'); break;
     case 'p': openWin('pets'); break;
     case 'b': openWin('book'); break;
     case 'h': openWin('help'); break;

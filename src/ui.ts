@@ -54,6 +54,7 @@ export function initUI() {
       </div>
       <div id="menu" class="frame">
         <button data-act="win" data-arg="bag">가방<kbd>I</kbd></button>
+        <button data-act="win" data-arg="stones">혼석<kbd>K</kbd></button>
         <button data-act="win" data-arg="pets">동료<kbd>P</kbd></button>
         <button data-act="win" data-arg="book">조합식<kbd>B</kbd></button>
         <button data-act="win" data-arg="help">도움말<kbd>H</kbd></button>
@@ -84,7 +85,10 @@ function act(a: string, arg: string) {
     case 's2': skillSong(); break;
     case 'hp': usePotion('hp'); break;
     case 'mp': usePotion('mp'); break;
-    case 'scroll': useScroll(); closeWin(); break;
+    case 'scroll':
+      if (G.inv.scroll > 0 && G.zone.def.id !== 'town') closeWin();
+      useScroll();
+      break;
     case 'stone': useStone(n); break;
     case 'sell': sellStone(n); break;
     case 'toggle': togglePet(n); break;
@@ -137,17 +141,27 @@ function petCard(uid: number, extra: string, cls = '', click = '') {
 function renderWin(): string {
   const head = (title: string) => `<div class="title">${title}<button class="x" data-act="close">×</button></div>`;
   if (win === 'bag') {
-    const stones = G.inv.stones
-      .map((s, i) => `<div class="card">${icon(s.sp)}<div class="info"><b>${SPECIES[s.sp].name}의 혼석</b> <em>Lv.${s.lv}</em></div>
-        <button data-act="stone" data-arg="${i}">동료로</button><button class="sub" data-act="sell" data-arg="${i}">판매 ${stonePrice(s)}G</button></div>`)
-      .join('');
     return `${head('가방')}<div class="body">
       <p class="gold">소지금 ${G.gold} G</p>
-      <p>무기: <b>${WEAPONS[G.weapon].name}</b> (공격 +${WEAPONS[G.weapon].atk}) · 방어구: <b>${ARMORS[G.armor].name}</b> (방어 +${ARMORS[G.armor].def})</p>
-      <p>공격력 ${G.player.atk} · 방어력 ${G.player.def}</p>
-      <div class="row"><span>체력 물약 x${G.inv.hp}</span><span>마나 물약 x${G.inv.mp}</span>
-      <span>귀환 주문서 x${G.inv.scroll} <button data-act="scroll">사용</button></span></div>
-      <h4>혼석 (${G.inv.stones.length})</h4>${stones || '<p class="dim">몬스터를 사냥하면 낮은 확률로 혼석을 얻습니다.</p>'}</div>`;
+      <h4>장비</h4>
+      <p>무기: <b>${WEAPONS[G.weapon].name}</b> (공격 +${WEAPONS[G.weapon].atk})</p>
+      <p>방어구: <b>${ARMORS[G.armor].name}</b> (방어 +${ARMORS[G.armor].def})</p>
+      <p class="dim">공격력 ${G.player.atk} · 방어력 ${G.player.def}</p>
+      <h4>소모품</h4>
+      <div class="card"><div class="info"><b>체력 물약</b> <em>x${G.inv.hp}</em></div><button data-act="hp">사용</button></div>
+      <div class="card"><div class="info"><b>마나 물약</b> <em>x${G.inv.mp}</em></div><button data-act="mp">사용</button></div>
+      <div class="card"><div class="info"><b>귀환 주문서</b> <em>x${G.inv.scroll}</em><small>마을로 즉시 돌아갑니다.</small></div><button data-act="scroll">사용</button></div>
+      <p class="dim">혼석은 혼석 가방(K)에 따로 보관됩니다.</p></div>`;
+  }
+  if (win === 'stones') {
+    const stones = G.inv.stones
+      .map((s, i) => `<div class="card">${icon(s.sp)}<div class="info"><b>${SPECIES[s.sp].name}의 혼석</b> <em>Lv.${s.lv}</em>
+        <small>${SPECIES[s.sp].tribe} · ${SPECIES[s.sp].tier}단계</small></div>
+        <button data-act="stone" data-arg="${i}">동료로</button><button class="sub" data-act="sell" data-arg="${i}">판매 ${stonePrice(s)}G</button></div>`)
+      .join('');
+    return `${head(`혼석 가방 (${G.inv.stones.length})`)}<div class="body">
+      <p class="dim">혼석을 쓰면 그 몬스터가 동료가 됩니다. 동료 ${G.pets.length}/${MAX_PETS}</p>
+      ${stones || '<p class="dim">몬스터를 사냥하면 낮은 확률로 혼석을 얻습니다.</p>'}</div>`;
   }
   if (win === 'pets') {
     const cards = G.pets
@@ -195,15 +209,15 @@ function renderWin(): string {
       ${item('귀환 주문서', `마을로 즉시 돌아옵니다. (보유 ${G.inv.scroll})`, PRICES.scroll, 'scroll')}
       ${w ? item(w.name, `공격 +${w.atk} (현재 ${WEAPONS[G.weapon].name} +${WEAPONS[G.weapon].atk})`, w.price, 'weapon') : '<p class="dim">최고의 무기를 갖고 있습니다.</p>'}
       ${ar ? item(ar.name, `방어 +${ar.def} (현재 ${ARMORS[G.armor].name} +${ARMORS[G.armor].def})`, ar.price, 'armor') : '<p class="dim">최고의 방어구를 갖고 있습니다.</p>'}
-      <p class="dim">혼석은 가방에서 판매할 수 있습니다.</p></div>`;
+      <p class="dim">혼석은 혼석 가방에서 판매할 수 있습니다.</p></div>`;
   }
   if (win === 'help') {
     return `${head('도움말')}<div class="body help">
       <p><b>이동</b> 땅을 클릭 (누르고 있으면 계속 이동)</p>
       <p><b>공격</b> 몬스터를 클릭하면 자동으로 공격합니다. <kbd>Tab</kbd> 가까운 몬스터 지정</p>
       <p><b>기술</b> <kbd>1</kbd> 강타 · <kbd>2</kbd> 회복의 노래 · <kbd>Q</kbd> 체력 물약 · <kbd>E</kbd> 마나 물약</p>
-      <p><b>창</b> <kbd>I</kbd> 가방 · <kbd>P</kbd> 동료 · <kbd>B</kbd> 조합식 · <kbd>Esc</kbd> 닫기</p>
-      <p><b>동료</b> 몬스터를 쓰러뜨리면 가끔 혼석이 나옵니다. 가방에서 혼석을 쓰면 그 몬스터가 동료가 되고, 3마리까지 함께 싸웁니다.</p>
+      <p><b>창</b> <kbd>I</kbd> 가방 · <kbd>K</kbd> 혼석 가방 · <kbd>P</kbd> 동료 · <kbd>B</kbd> 조합식 · <kbd>Esc</kbd> 닫기</p>
+      <p><b>동료</b> 몬스터를 쓰러뜨리면 가끔 혼석이 나옵니다. 혼석 가방에서 혼석을 쓰면 그 몬스터가 동료가 되고, 3마리까지 뒤를 따라다니며 함께 싸웁니다.</p>
       <p><b>조합</b> 마을의 조합사에게 가서 일정 레벨 이상의 동료 둘을 조합하면 더 강한 새 몬스터가 태어납니다.</p>
       <p><b>마을</b> 상인에게서 물약과 장비를 사고, 치료사에게서 무료로 회복할 수 있습니다. 미니맵의 파란 점이 다음 지역으로 가는 포탈입니다.</p>
       <button class="sub" data-act="reset">${sure('reset', '처음부터 다시 시작')}</button></div>`;
